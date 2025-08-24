@@ -66,3 +66,11 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
   });
 });
+
+document.querySelector("#open-mini").addEventListener("click", async () => {
+  try {
+    await invoke("open_now_playing");
+  } catch (e) {
+    console.error(e);
+  }
+});

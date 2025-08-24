@@ -12,7 +12,7 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
-use tauri::{Emitter, Manager, State};
+use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use url::Url;
 
 #[derive(Default)]
@@ -232,6 +232,33 @@ fn build_spotify(window: &tauri::Window) -> Result<AuthCodePkceSpotify, String> 
 
     Ok(AuthCodePkceSpotify::with_config(creds, oauth, config))
 }
+
+#[tauri::command]
+fn open_now_playing(window: tauri::Window) -> Result<(), String> {
+    let app = window.app_handle();
+    let label = "nowplaying";
+
+    if let Some(w) = app.get_webview_window(label) {
+        let _ = w.set_focus();
+        return Ok(());
+    }
+
+    WebviewWindowBuilder::new(
+        app,
+        label,
+        WebviewUrl::App("nowplaying.html".into()),
+    )
+    .title("Now Playing")
+    .inner_size(360.0, 140.0)   // <-- v2 signature: width, height
+    .resizable(false)
+    .always_on_top(true)
+    .decorations(false)
+    .build()
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 
 #[tauri::command]
 async fn restore_spotify(
@@ -515,7 +542,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             connect_spotify,
             restore_spotify,
-            get_current_playing
+            get_current_playing,
+            open_now_playing
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
