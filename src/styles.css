@@ -1,11 +1,13 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap');
+
 .logo.vanilla:hover {
   filter: drop-shadow(0 0 2em #ffe21c);
 }
 :root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-family: "Inter", sans-serif;
   font-size: 16px;
   line-height: 24px;
-  font-weight: 400;
+  font-weight: 600;
 
   color: #0f0f0f;
   background-color: #f6f6f6;
@@ -24,16 +26,6 @@
   flex-direction: column;
   justify-content: center;
   text-align: center;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
 }
 
 h1 {
@@ -87,11 +79,6 @@ button {
     color: #f6f6f6;
     background-color: #2f2f2f;
   }
-
-  a:hover {
-    color: #24c8db;
-  }
-
   input,
   button {
     color: #ffffff;

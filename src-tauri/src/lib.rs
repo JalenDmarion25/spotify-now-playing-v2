@@ -12,13 +12,14 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use url::Url;
 
 #[derive(Default)]
 struct SpotifyStore {
     // Use Arc so we can clone a handle and drop the lock before we await (fixes the Send error)
     client: Option<Arc<AuthCodePkceSpotify>>,
+    watch_started: bool,
 }
 
 type SharedStore = Arc<Mutex<SpotifyStore>>;
@@ -30,6 +31,141 @@ struct NowPlaying {
     artists: Vec<String>,
     album: Option<String>,
     artwork_url: Option<String>,
+}
+
+fn build_now_playing_from_ctx(ctx: &rspotify::model::CurrentlyPlayingContext) -> NowPlaying {
+    use rspotify::model::PlayableItem;
+
+    let mut track_name = None;
+    let mut artists = Vec::new();
+    let mut album = None;
+    let mut artwork_url = None;
+
+    if let Some(item) = &ctx.item {
+        match item {
+            PlayableItem::Track(track) => {
+                track_name = Some(track.name.clone());
+                artists = track.artists.iter().map(|a| a.name.clone()).collect();
+                album = Some(track.album.name.clone());
+                artwork_url = pick_image_url(&track.album.images, 300);
+            }
+            PlayableItem::Episode(ep) => {
+                track_name = Some(ep.name.clone());
+                album = Some(ep.show.name.clone());
+                artists = vec![ep.show.publisher.clone()];
+                artwork_url = pick_image_url(&ep.images, 300);
+            }
+        }
+    }
+
+    NowPlaying {
+        is_playing: ctx.is_playing,
+        track_name,
+        artists,
+        album,
+        artwork_url,
+    }
+}
+
+fn start_watcher_if_needed(app: &tauri::AppHandle, state: &SharedStore) {
+    // Take the client and mark watcher started without holding the lock across await.
+    let (client, should_start) = {
+        let mut guard = state.lock();
+        let c = guard.client.clone();
+        let should = c.is_some() && !guard.watch_started;
+        if should {
+            guard.watch_started = true;
+        }
+        (c, should)
+    };
+
+    if !should_start {
+        return;
+    }
+
+    let app = app.clone();
+    let client = client.unwrap(); // safe because should_start implies Some
+
+    tauri::async_runtime::spawn(async move {
+        use tokio::time::{sleep, Duration};
+
+        // Keep basic state to reduce noisy emits
+        let mut last_key: Option<String> = None;
+        let mut last_playing: Option<bool> = None;
+
+        loop {
+            // keep token fresh; ignore errors quietly
+            let _ = client.auto_reauth().await;
+
+            match client.current_user_playing_item().await {
+                Ok(Some(ctx)) => {
+                    // Make a simple identity key: title + first artist + album
+                    let key = {
+                        let title = ctx
+                            .item
+                            .as_ref()
+                            .map(|i| match i {
+                                rspotify::model::PlayableItem::Track(t) => t.name.as_str(),
+                                rspotify::model::PlayableItem::Episode(e) => e.name.as_str(),
+                            })
+                            .unwrap_or_default();
+                        let first_artist = ctx
+                            .item
+                            .as_ref()
+                            .and_then(|i| match i {
+                                rspotify::model::PlayableItem::Track(t) => {
+                                    t.artists.get(0).map(|a| a.name.as_str())
+                                }
+                                rspotify::model::PlayableItem::Episode(e) => {
+                                    Some(e.show.publisher.as_str())
+                                }
+                            })
+                            .unwrap_or_default();
+                        let album = ctx
+                            .item
+                            .as_ref()
+                            .map(|i| match i {
+                                rspotify::model::PlayableItem::Track(t) => t.album.name.as_str(),
+                                rspotify::model::PlayableItem::Episode(e) => e.show.name.as_str(),
+                            })
+                            .unwrap_or_default();
+                        format!("{title}|{first_artist}|{album}")
+                    };
+
+                    let np = build_now_playing_from_ctx(&ctx);
+                    let changed =
+                        last_key.as_deref() != Some(&key) || last_playing != Some(np.is_playing);
+
+                    if changed {
+                        let _ = app.emit("now_playing_update", &np);
+                        last_key = Some(key);
+                        last_playing = Some(np.is_playing);
+                    }
+                }
+                Ok(None) => {
+                    // Nothing playing
+                    let np = NowPlaying {
+                        is_playing: false,
+                        track_name: None,
+                        artists: Vec::new(),
+                        album: None,
+                        artwork_url: None,
+                    };
+                    let changed = last_key.is_some() || last_playing != Some(false);
+                    if changed {
+                        let _ = app.emit("now_playing_update", &np);
+                        last_key = None;
+                        last_playing = Some(false);
+                    }
+                }
+                Err(_) => {
+                    // ignore transient errors
+                }
+            }
+
+            sleep(Duration::from_secs(2)).await;
+        }
+    });
 }
 
 fn pick_image_url(images: &[Image], target: u32) -> Option<String> {
@@ -129,6 +265,10 @@ async fn restore_spotify(
         }
 
         state.lock().client = Some(Arc::new(spotify));
+
+        let app = window.app_handle();
+        start_watcher_if_needed(&app, &state);
+
         return Ok(true);
     }
 
@@ -156,7 +296,7 @@ async fn connect_spotify(
         std::env::var("SPOTIFY_CLIENT_ID").map_err(|_| "Missing SPOTIFY_CLIENT_ID".to_string())?;
     let redirect_uri = "http://127.0.0.1:5173/callback".to_string();
 
-    let cache_path = token_cache_path(&window)?; // ⬅️ same path as build_spotify
+    let cache_path = token_cache_path(&window)?;
     let creds = Credentials::new(&client_id, "");
     let oauth = OAuth {
         redirect_uri: redirect_uri.clone(),
@@ -166,22 +306,13 @@ async fn connect_spotify(
     let config = Config {
         token_cached: true,
         token_refreshing: true,
-        cache_path, // ⬅️ PathBuf, not Option
+        cache_path,
         ..Default::default()
     };
     let mut spotify = AuthCodePkceSpotify::with_config(creds, oauth, config);
 
     // 2) Try to reuse a cached token (no browser)
     let _ = spotify.read_token_cache(true).await; // load even if expired; we'll refresh
-
-    // let has_cached = {
-    //     let guard = spotify
-    //         .get_token()
-    //         .lock()
-    //         .await
-    //         .map_err(|_| "Token lock failed".to_string())?;
-    //     guard.is_some()
-    // };
 
     let token_mutex = spotify.get_token();
     let has_cached = {
@@ -227,6 +358,10 @@ async fn connect_spotify(
     }
 
     state.lock().client = Some(Arc::new(spotify));
+
+    let app = window.app_handle();
+    start_watcher_if_needed(&app, &state);
+
     Ok(())
 }
 
@@ -347,7 +482,7 @@ async fn get_current_playing(state: State<'_, SharedStore>) -> Result<NowPlaying
             track_name,
             artists,
             album,
-            artwork_url, // <--- NEW
+            artwork_url,
         })
     } else {
         Ok(NowPlaying {
@@ -355,7 +490,7 @@ async fn get_current_playing(state: State<'_, SharedStore>) -> Result<NowPlaying
             track_name: None,
             artists: Vec::new(),
             album: None,
-            artwork_url: None, // <--- NEW
+            artwork_url: None,
         })
     }
 }
