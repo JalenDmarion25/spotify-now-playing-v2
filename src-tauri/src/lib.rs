@@ -1,13 +1,15 @@
 use parking_lot::Mutex;
 use rspotify::{
-    clients::OAuthClient,
+    clients::{BaseClient, OAuthClient},
     model::{Image, PlayableItem},
-    scopes, AuthCodePkceSpotify, Config, Credentials, OAuth,
+    scopes, AuthCodePkceSpotify, Config, Credentials, OAuth, Token,
 };
 use serde::Serialize;
 use std::{
+    fs,
     io::{Read, Write},
     net::TcpListener,
+    path::PathBuf,
     sync::Arc,
 };
 use tauri::{Manager, State};
@@ -43,56 +45,188 @@ fn pick_image_url(images: &[Image], target: u32) -> Option<String> {
         .map(|img| img.url.clone())
 }
 
+fn read_token_from_disk(window: &tauri::Window) -> Result<Option<Token>, String> {
+    let path = token_cache_path(window)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let data = fs::read(&path).map_err(|e| format!("read token file: {e}"))?;
+    let token: Token =
+        serde_json::from_slice(&data).map_err(|e| format!("parse token json: {e}"))?;
+    Ok(Some(token))
+}
+
+fn write_token_to_disk(window: &tauri::Window, token: &Token) -> Result<(), String> {
+    let path = token_cache_path(window)?;
+    let data = serde_json::to_vec(token).map_err(|e| format!("serialize token: {e}"))?;
+    fs::write(&path, data).map_err(|e| format!("write token file: {e}"))
+}
+
+// pick a stable cache file; make sure the folder exists
+fn token_cache_path(window: &tauri::Window) -> Result<PathBuf, String> {
+    let path = window
+        .app_handle()
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("app_local_data_dir: {e}"))?
+        .join("spotify")
+        .join("token.json");
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("create cache dir: {e}"))?;
+    }
+    Ok(path)
+}
+
+fn build_spotify(window: &tauri::Window) -> Result<AuthCodePkceSpotify, String> {
+    let client_id =
+        std::env::var("SPOTIFY_CLIENT_ID").map_err(|_| "Missing SPOTIFY_CLIENT_ID".to_string())?;
+
+    let creds = Credentials::new(&client_id, "");
+    let oauth = OAuth {
+        redirect_uri: "http://127.0.0.1:5173/callback".to_string(),
+        scopes: scopes!("user-read-currently-playing", "user-read-playback-state"),
+        ..Default::default()
+    };
+    let config = Config {
+        token_cached: true,
+        token_refreshing: true,
+        cache_path: token_cache_path(window)?,
+        ..Default::default()
+    };
+
+    Ok(AuthCodePkceSpotify::with_config(creds, oauth, config))
+}
+
 #[tauri::command]
-async fn connect_spotify(state: State<'_, SharedStore>) -> Result<(), String> {
-    // 1) Credentials + OAuth (PKCE: no secret required; empty string is fine)
+async fn restore_spotify(
+    state: State<'_, SharedStore>,
+    window: tauri::Window,
+) -> Result<bool, String> {
+    let spotify = build_spotify(&window)?;
+
+    // Load our own persisted token
+    if let Some(token) = read_token_from_disk(&window)? {
+        // Put it into the client via the token mutex
+        {
+            let token_mutex = spotify.get_token();
+            let mut guard = token_mutex
+                .lock()
+                .await
+                .map_err(|_| "Token lock failed".to_string())?;
+            *guard = Some(token);
+        } // drop guard before awaiting
+
+        // Refresh if needed, then persist any updated token
+        let _ = spotify.auto_reauth().await;
+        if let Some(tok) = spotify
+            .get_token()
+            .lock()
+            .await
+            .map_err(|_| "Token lock failed".to_string())?
+            .clone()
+        {
+            let _ = write_token_to_disk(&window, &tok);
+        }
+
+        state.lock().client = Some(Arc::new(spotify));
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
+#[tauri::command]
+async fn connect_spotify(
+    state: State<'_, SharedStore>,
+    window: tauri::Window,
+) -> Result<(), String> {
+    // 0) If we already have a client, just refresh and return (no browser)
+    let existing = {
+        let guard = state.lock(); // guard lives only inside this block
+        guard.client.clone()
+    }; // guard dropped here BEFORE the await below
+
+    if let Some(existing) = existing {
+        let _ = existing.auto_reauth().await; // now this future is Send
+        return Ok(());
+    }
+
+    // 1) Build client + stable cache path
     let client_id =
         std::env::var("SPOTIFY_CLIENT_ID").map_err(|_| "Missing SPOTIFY_CLIENT_ID".to_string())?;
     let redirect_uri = "http://127.0.0.1:5173/callback".to_string();
 
-    // rspotify 0.15 -> new(&str, &str)
+    let cache_path = token_cache_path(&window)?; // ⬅️ same path as build_spotify
     let creds = Credentials::new(&client_id, "");
-
     let oauth = OAuth {
         redirect_uri: redirect_uri.clone(),
         scopes: scopes!("user-read-currently-playing", "user-read-playback-state"),
         ..Default::default()
     };
     let config = Config {
-        token_cached: false,
+        token_cached: true,
+        token_refreshing: true,
+        cache_path, // ⬅️ PathBuf, not Option
         ..Default::default()
     };
-
     let mut spotify = AuthCodePkceSpotify::with_config(creds, oauth, config);
 
-    // 2) Open authorize URL
+    // 2) Try to reuse a cached token (no browser)
+    let _ = spotify.read_token_cache(true).await; // load even if expired; we'll refresh
+
+    // let has_cached = {
+    //     let guard = spotify
+    //         .get_token()
+    //         .lock()
+    //         .await
+    //         .map_err(|_| "Token lock failed".to_string())?;
+    //     guard.is_some()
+    // };
+
+    let token_mutex = spotify.get_token();
+    let has_cached = {
+        let guard = token_mutex
+            .lock()
+            .await
+            .map_err(|_| "Token lock failed".to_string())?;
+        guard.is_some()
+    };
+
+    if has_cached {
+        let _ = spotify.auto_reauth().await; // refresh if needed
+        let _ = spotify.write_token_cache().await; // persist any new token
+        state.lock().client = Some(Arc::new(spotify));
+        return Ok(());
+    }
+
+    // 3) First-time auth: open browser, wait for code, exchange, cache, store
     let auth_url = spotify.get_authorize_url(None).map_err(|e| e.to_string())?;
     tauri_plugin_opener::open_url(auth_url.as_str(), None::<&str>).map_err(|e| e.to_string())?;
 
-    // 3) Tiny blocking HTTP listener to catch ?code=...
     let (tx, rx) = tokio::sync::oneshot::channel::<String>();
     let addr = "127.0.0.1:5173".to_string();
-
     tauri::async_runtime::spawn_blocking(move || {
-        if let Err(e) = run_callback_server_blocking(&addr, tx) {
-            eprintln!("Callback server error: {e}");
-        }
+        let _ = run_callback_server_blocking(&addr, tx);
     });
 
-    // 4) Wait for code -> exchange for token
     let code = rx.await.map_err(|e| format!("Callback wait error: {e}"))?;
-
     spotify
         .request_token(&code)
         .await
         .map_err(|e| format!("Token exchange failed: {e}"))?;
 
-    // 5) Save client (Arc) in state
+    // Persist the token we just received
+    if let Some(tok) = spotify
+        .get_token()
+        .lock()
+        .await
+        .map_err(|_| "Token lock failed".to_string())?
+        .clone()
     {
-        let mut guard = state.lock();
-        guard.client = Some(Arc::new(spotify));
+        let _ = write_token_to_disk(&window, &tok);
     }
 
+    state.lock().client = Some(Arc::new(spotify));
     Ok(())
 }
 
@@ -202,7 +336,7 @@ async fn get_current_playing(state: State<'_, SharedStore>) -> Result<NowPlaying
                     // In case user is listening to a podcast episode
                     track_name = Some(ep.name.clone());
                     album = Some(ep.show.name.clone());
-                    artists = vec![ep.show.publisher.clone()]; 
+                    artists = vec![ep.show.publisher.clone()];
                     artwork_url = pick_image_url(&ep.images, 300);
                 }
             }
@@ -245,6 +379,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             connect_spotify,
+            restore_spotify,
             get_current_playing
         ])
         .run(tauri::generate_context!())

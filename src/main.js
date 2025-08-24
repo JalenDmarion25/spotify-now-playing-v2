@@ -5,25 +5,35 @@ const nowPlayingEl = document.querySelector("#now-playing");
 const artworkEl = document.querySelector("#artwork");
 
 
-window.addEventListener("DOMContentLoaded", () => {
-  document
-    .querySelector("#connect-form")
-    .addEventListener("submit", async (e) => {
-      e.preventDefault();
-      statusEl.textContent = "Opening Spotify login...";
-      try {
-        await invoke("connect_spotify");
-        statusEl.textContent = "Connected ✅";
-        await refreshNowPlaying();
-      } catch (err) {
-        statusEl.textContent = "Connect failed: " + err;
-      }
-    });
+window.addEventListener("DOMContentLoaded", async () => {
+  try {
+    const restored = await invoke("restore_spotify");
+    if (restored) {
+      statusEl.textContent = "Connected ✅";
+      await refreshNowPlaying();
+    } else {
+      statusEl.textContent = "Not connected";
+    }
+  } catch (e) {
+    console.error(e);
+    statusEl.textContent = "Not connected";
+  }
 
-  document
-    .querySelector("#refresh-btn")
-    .addEventListener("click", refreshNowPlaying);
+  document.querySelector("#connect-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    statusEl.textContent = "Opening Spotify login...";
+    try {
+      await invoke("connect_spotify");
+      statusEl.textContent = "Connected ✅";
+      await refreshNowPlaying();
+    } catch (err) {
+      statusEl.textContent = "Connect failed: " + err;
+    }
+  });
+
+  document.querySelector("#refresh-btn").addEventListener("click", refreshNowPlaying);
 });
+
 
 async function refreshNowPlaying() {
   try {
