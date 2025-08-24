@@ -1,4 +1,4 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -10,13 +10,20 @@
 
   <body>
     <main class="container">
-
       <p>Click to Connect</p>
 
-      <form class="row" id="greet-form">
+      <form class="row" id="connect-form">
         <button type="submit">Connect</button>
       </form>
-      <p id="greet-msg"></p>
+
+      <div class="row">
+        <button id="refresh-btn" type="button">Refresh Now Playing</button>
+      </div>
+
+      <p id="status"></p>
+      <p id="now-playing"></p>
+      <img id="artwork" alt="Album art"  />
+
     </main>
   </body>
 </html>
