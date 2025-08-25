@@ -1,6 +1,6 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
-
+const { WebviewWindow, getAll } = window.__TAURI__.webviewWindow;
 
 const statusEl = document.querySelector("#status");
 const nowPlayingEl = document.querySelector("#now-playing");
@@ -26,21 +26,13 @@ function renderNowPlaying(d) {
   }
 }
 
-
 window.addEventListener("DOMContentLoaded", async () => {
-  // live updates from Rust
-  await listen("now_playing_update", (evt) => {
-    renderNowPlaying(evt.payload);
-  });
+  // --- your existing listeners ---
+  await listen("now_playing_update", (evt) => renderNowPlaying(evt.payload));
 
-  // attempt silent restore on boot (this will also start the watcher in Rust)
   try {
     const restored = await invoke("restore_spotify");
-    if (restored) {
-      statusEl.textContent = "Connected ✅";
-    } else {
-      statusEl.textContent = "Not connected";
-    }
+    statusEl.textContent = restored ? "Connected ✅" : "Not connected";
   } catch {
     statusEl.textContent = "Not connected";
   }
@@ -49,14 +41,13 @@ window.addEventListener("DOMContentLoaded", async () => {
     e.preventDefault();
     statusEl.textContent = "Opening Spotify login...";
     try {
-      await invoke("connect_spotify"); // watcher starts in Rust after connect
+      await invoke("connect_spotify");
       statusEl.textContent = "Connected ✅";
     } catch (err) {
       statusEl.textContent = "Connect failed: " + err;
     }
   });
 
-  // optional manual refresh (kept as a backup)
   document.querySelector("#refresh-btn").addEventListener("click", async () => {
     try {
       const d = await invoke("get_current_playing");
@@ -65,12 +56,29 @@ window.addEventListener("DOMContentLoaded", async () => {
       nowPlayingEl.textContent = "Unable to fetch now playing: " + err;
     }
   });
-});
 
-document.querySelector("#open-mini").addEventListener("click", async () => {
-  try {
-    await invoke("open_now_playing");
-  } catch (e) {
-    console.error(e);
-  }
+  // --- bind to your EXISTING button ---
+  const openBtn = document.getElementById("open-extra");
+  openBtn.addEventListener("click", async () => {
+    // If it's already open, just focus it
+    const existing = (getAll?.() || []).find(w => w.label === "extra");
+    if (existing) {
+      try { await existing.setFocus(); } catch {}
+      return;
+    }
+
+    // Resolve a correct URL relative to current page (tauri://localhost/…)
+    const url = new URL("extra.html", window.location.href).toString();
+
+    const win = new WebviewWindow("extra", {
+      url,
+      title: "Extra Window",
+      width: 400,
+      height: 300,
+      resizable: true,
+    });
+
+    win.once("tauri://created", () => console.log("Extra window created"));
+    win.once("tauri://error", (e) => console.error("Create failed:", e));
+  });
 });
