@@ -1,0 +1,65 @@
+html, body {
+  margin: 0;
+  font: 14px system-ui;
+  user-select: none;
+  -webkit-app-region: drag;   /* 👈 key line */
+}
+body:active { cursor: grabbing; }
+
+[data-tauri-drag-region="no-drag"] {
+  -webkit-app-region: no-drag;
+  cursor: pointer;
+}
+
+.np { 
+    display:flex; 
+    gap:12px; 
+    align-items:center; 
+    padding:12px;
+}
+
+#artwork { 
+    width:56px;
+    height:56px;
+    border-radius:8px;
+    object-fit:cover;
+    display:none; 
+    user-select: none;
+}
+
+#title { 
+    font-weight:600;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis; 
+    color: rgb(0, 207, 0);
+}
+
+#meta  {
+    font-size:12px;
+    font-weight: 600;
+    color:#ffffff;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+
+[data-tauri-drag-region="no-drag"] {
+  -webkit-app-region: no-drag;
+  cursor: pointer;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #f6f6f6;
+    background-color: #2f2f2f;
+  }
+  input,
+  button {
+    color: #ffffff;
+    background-color: #0f0f0f98;
+  }
+  button:active {
+    background-color: #0f0f0f69;
+  }
+}

@@ -13,6 +13,7 @@ use std::{
     sync::Arc,
 };
 use tauri::{Emitter, Manager, State};
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 #[derive(Default)]
@@ -20,6 +21,7 @@ struct SpotifyStore {
     // Use Arc so we can clone a handle and drop the lock before we await (fixes the Send error)
     client: Option<Arc<AuthCodePkceSpotify>>,
     watch_started: bool,
+    cancel: Option<CancellationToken>,
 }
 
 type SharedStore = Arc<Mutex<SpotifyStore>>;
@@ -86,84 +88,55 @@ fn start_watcher_if_needed(app: &tauri::AppHandle, state: &SharedStore) {
     let app = app.clone();
     let client = client.unwrap(); // safe because should_start implies Some
 
+    let token = CancellationToken::new();
+    {
+        let mut g = state.lock();
+        g.cancel = Some(token.clone());
+    }
+
     tauri::async_runtime::spawn(async move {
         use tokio::time::{sleep, Duration};
-
-        // Keep basic state to reduce noisy emits
-        let mut last_key: Option<String> = None;
-        let mut last_playing: Option<bool> = None;
+        let state_handle = app.state::<SharedStore>();
 
         loop {
-            // keep token fresh; ignore errors quietly
-            let _ = client.auto_reauth().await;
+            tokio::select! {
+              _ = token.cancelled() => break,
 
-            match client.current_user_playing_item().await {
-                Ok(Some(ctx)) => {
-                    // Make a simple identity key: title + first artist + album
-                    let key = {
-                        let title = ctx
-                            .item
-                            .as_ref()
-                            .map(|i| match i {
-                                rspotify::model::PlayableItem::Track(t) => t.name.as_str(),
-                                rspotify::model::PlayableItem::Episode(e) => e.name.as_str(),
-                            })
-                            .unwrap_or_default();
-                        let first_artist = ctx
-                            .item
-                            .as_ref()
-                            .and_then(|i| match i {
-                                rspotify::model::PlayableItem::Track(t) => {
-                                    t.artists.get(0).map(|a| a.name.as_str())
-                                }
-                                rspotify::model::PlayableItem::Episode(e) => {
-                                    Some(e.show.publisher.as_str())
-                                }
-                            })
-                            .unwrap_or_default();
-                        let album = ctx
-                            .item
-                            .as_ref()
-                            .map(|i| match i {
-                                rspotify::model::PlayableItem::Track(t) => t.album.name.as_str(),
-                                rspotify::model::PlayableItem::Episode(e) => e.show.name.as_str(),
-                            })
-                            .unwrap_or_default();
-                        format!("{title}|{first_artist}|{album}")
-                    };
+              _ = async {
+                // if refresh fails -> auth is gone: clear everything and stop
+                if client.auto_reauth().await.is_err() {
+                  let _ = app.emit("auth_lost", &());
+                  let mut s = state_handle.lock();
+                  s.client = None;
+                  s.watch_started = false;
+                  s.cancel = None;
+                  return;
+                }
 
+                match client.current_user_playing_item().await {
+                  Ok(Some(ctx)) => {
                     let np = build_now_playing_from_ctx(&ctx);
-                    let changed =
-                        last_key.as_deref() != Some(&key) || last_playing != Some(np.is_playing);
+                    let _ = app.emit("now_playing_update", &np);
+                  }
+                  Ok(None) => {
+                    let _ = app.emit("now_playing_update", &NowPlaying {
+                      is_playing: false, track_name: None, artists: vec![], album: None, artwork_url: None
+                    });
+                  }
+                  Err(_) => {
+                    // treat as fatal (likely revoked / invalid)
+                    let _ = app.emit("auth_lost", &());
+                    let mut s = state_handle.lock();
+                    s.client = None;
+                    s.watch_started = false;
+                    s.cancel = None;
+                    return;
+                  }
+                }
 
-                    if changed {
-                        let _ = app.emit("now_playing_update", &np);
-                        last_key = Some(key);
-                        last_playing = Some(np.is_playing);
-                    }
-                }
-                Ok(None) => {
-                    // Nothing playing
-                    let np = NowPlaying {
-                        is_playing: false,
-                        track_name: None,
-                        artists: Vec::new(),
-                        album: None,
-                        artwork_url: None,
-                    };
-                    let changed = last_key.is_some() || last_playing != Some(false);
-                    if changed {
-                        let _ = app.emit("now_playing_update", &np);
-                        last_key = None;
-                        last_playing = Some(false);
-                    }
-                }
-                Err(_) => {
-                    // ignore transient errors
-                }
+                sleep(Duration::from_secs(2)).await;
+              } => {}
             }
-
-            sleep(Duration::from_secs(2)).await;
         }
     });
 }
@@ -233,16 +206,21 @@ fn build_spotify(window: &tauri::Window) -> Result<AuthCodePkceSpotify, String> 
     Ok(AuthCodePkceSpotify::with_config(creds, oauth, config))
 }
 
+fn clear_token_cache(window: &tauri::Window) -> Result<(), String> {
+    let path = token_cache_path(window)?;
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| format!("remove token file: {e}"))?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn restore_spotify(
     state: State<'_, SharedStore>,
     window: tauri::Window,
 ) -> Result<bool, String> {
     let spotify = build_spotify(&window)?;
-
-    // Load our own persisted token
     if let Some(token) = read_token_from_disk(&window)? {
-        // Put it into the client via the token mutex
         {
             let token_mutex = spotify.get_token();
             let mut guard = token_mutex
@@ -250,10 +228,20 @@ async fn restore_spotify(
                 .await
                 .map_err(|_| "Token lock failed".to_string())?;
             *guard = Some(token);
-        } // drop guard before awaiting
+        }
 
-        // Refresh if needed, then persist any updated token
-        let _ = spotify.auto_reauth().await;
+        // ⬇️ check the result; if it fails, clear cache and report false
+        if let Err(_) = spotify.auto_reauth().await {
+            let _ = clear_token_cache(&window);
+            let mut s = state.lock();
+            if let Some(t) = s.cancel.take() {
+                t.cancel();
+            }
+            s.client = None;
+            s.watch_started = false;
+            return Ok(false);
+        }
+
         if let Some(tok) = spotify
             .get_token()
             .lock()
@@ -263,15 +251,12 @@ async fn restore_spotify(
         {
             let _ = write_token_to_disk(&window, &tok);
         }
-
         state.lock().client = Some(Arc::new(spotify));
 
         let app = window.app_handle();
         start_watcher_if_needed(&app, &state);
-
         return Ok(true);
     }
-
     Ok(false)
 }
 
@@ -517,6 +502,62 @@ pub fn run() {
             restore_spotify,
             get_current_playing
         ])
+        .on_window_event(|window, event| {
+            use tauri::WindowEvent;
+
+            match event {
+                // Window is actually gone now
+                WindowEvent::Destroyed => {
+                    let app = window.app_handle();
+
+                    // If no more windows, terminate the app + poller
+                    if app.webview_windows().is_empty() {
+                        let state = app.state::<SharedStore>();
+                        let mut s = state.lock();
+                        if let Some(t) = s.cancel.take() {
+                            t.cancel();
+                        }
+                        s.client = None;
+                        s.watch_started = false;
+                        let _ = clear_token_cache(&window);
+
+                        // Be absolutely sure the process exits (dev on Windows can be sticky)
+                        #[cfg(windows)]
+                        {
+                            std::process::exit(0);
+                        }
+                        #[cfg(not(windows))]
+                        {
+                            app.exit(0);
+                        }
+                    }
+                }
+
+                // Optional: if the **main** window is closed, quit immediately regardless of widget
+                WindowEvent::CloseRequested { .. } if window.label() == "main" => {
+                    let app = window.app_handle();
+                    let state = app.state::<SharedStore>();
+                    let mut s = state.lock();
+                    if let Some(t) = s.cancel.take() {
+                        t.cancel();
+                    }
+                    s.client = None;
+                    s.watch_started = false;
+                    let _ = clear_token_cache(&window);
+
+                    #[cfg(windows)]
+                    {
+                        std::process::exit(0);
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        app.exit(0);
+                    }
+                }
+
+                _ => {}
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

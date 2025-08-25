@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-capability",
   "description": "App capability",
-  "windows": ["main", "extra"],
+  "windows": ["main", "widget"],
   "permissions": [
     "core:default",
     "core:event:default",
