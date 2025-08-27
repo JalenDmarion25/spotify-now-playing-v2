@@ -519,7 +519,7 @@ pub fn run() {
                         }
                         s.client = None;
                         s.watch_started = false;
-                        let _ = clear_token_cache(&window);
+                        // let _ = clear_token_cache(&window);
 
                         // Be absolutely sure the process exits (dev on Windows can be sticky)
                         #[cfg(windows)]
@@ -543,7 +543,7 @@ pub fn run() {
                     }
                     s.client = None;
                     s.watch_started = false;
-                    let _ = clear_token_cache(&window);
+                    // let _ = clear_token_cache(&window);
 
                     #[cfg(windows)]
                     {

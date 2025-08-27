@@ -71,7 +71,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       width: 380,
       height: 80,
       resizable: false,
-      alwaysOnTop: true,
+      maximizable: false,
       decorations: false,
       
     });

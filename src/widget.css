@@ -1,65 +1,108 @@
-html, body {
+html,
+body {
   margin: 0;
   font: 14px system-ui;
   user-select: none;
-  -webkit-app-region: drag;   /* 👈 key line */
+  -webkit-app-region: drag; /* 👈 key line */
 }
-body:active { cursor: grabbing; }
-
-[data-tauri-drag-region="no-drag"] {
-  -webkit-app-region: no-drag;
-  cursor: pointer;
+body:active {
+  cursor: grabbing;
 }
 
-.np { 
-    display:flex; 
-    gap:12px; 
-    align-items:center; 
-    padding:12px;
+
+.widget {
+  width: 350px;          /* set to your widget width */
+  height: 70px;          /* adjust if needed */
+  overflow: hidden;
+  transform: translateX(-500px); /* hidden off-screen (left) */
+  transition: transform 500ms ease;
 }
 
-#artwork { 
-    width:56px;
-    height:56px;
-    border-radius:8px;
-    object-fit:cover;
-    display:none; 
-    user-select: none;
+
+.widget.show {
+  transform: translateX(0);      /* slide in */
 }
 
-#title { 
-    font-weight:600;
-    white-space:nowrap;
-    overflow:hidden;
-    text-overflow:ellipsis; 
-    color: rgb(0, 207, 0);
+/* Looping marquee (infinite) for long lines */
+.looping {
+  animation: loop-marquee var(--loop-duration, 20s) linear infinite;
+  will-change: transform;
 }
 
-#meta  {
-    font-size:12px;
-    font-weight: 600;
-    color:#ffffff;
-    white-space:nowrap;
-    overflow:hidden;
-    text-overflow:ellipsis;
+/* Start slightly right (like 290px in the old code), end fully past left */
+@keyframes loop-marquee {
+  from { transform: translateX(var(--loop-start, 260px)); }
+  to   { transform: translateX(calc(-1 * (var(--loop-end, 0px)))); }
 }
 
-[data-tauri-drag-region="no-drag"] {
-  -webkit-app-region: no-drag;
-  cursor: pointer;
+.np {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
 }
+
+#artwork {
+  min-width: 56px;
+  min-height: 56px;
+  max-width: 56px;
+  max-height: 56px;
+  border-radius: 8px;
+  object-fit: cover;
+  user-select: none;
+
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 660ms ease;
+}
+
+#artwork.show {
+  opacity: 1;
+  visibility: visible;
+}
+
+.text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* hidden baseline */
+#title, #meta {
+  width: 100%;
+  position: relative;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+#title span, #meta span {
+  display: inline-block;
+  padding-right: 2rem;      /* little gap before it loops */
+  will-change: transform;
+}
+
+#title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: rgb(0, 207, 0);
+}
+
+#meta {
+  font-size: 16px;
+  font-weight: 600;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#title, #meta { text-overflow: clip; }
+
 
 @media (prefers-color-scheme: dark) {
   :root {
     color: #f6f6f6;
     background-color: #2f2f2f;
-  }
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-  }
-  button:active {
-    background-color: #0f0f0f69;
   }
 }
