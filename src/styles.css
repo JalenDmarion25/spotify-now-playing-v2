@@ -74,6 +74,18 @@ button {
   margin-right: 5px;
 }
 
+#status.connected {
+  color: rgb(0, 230, 0);
+}
+
+#status.not-connected {
+  color: goldenrod;
+}
+
+#status.error {
+  color: red;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     color: #f6f6f6;

@@ -7,6 +7,15 @@ const loopMeasure = new WeakMap();
 
 let lastKey = ""; // remembers last track to avoid animating on no-op updates
 
+function resolveArtUrl(d) {
+  if (d?.artwork_url) return d.artwork_url;
+  if (d?.artwork_path && window.__TAURI__?.core?.convertFileSrc) {
+    return window.__TAURI__.core.convertFileSrc(d.artwork_path);
+  }
+  return "";
+}
+
+
 function ensureSpan(el) {
   let span = el.querySelector("span");
   if (!span) {
@@ -29,10 +38,10 @@ function applyMarquee(el) {
   // measure after layout
   requestAnimationFrame(() => {
     const cs = getComputedStyle(span);
-    const padR = parseFloat(cs.paddingRight) || 0; // ← include the gap you set in CSS
+    const padR = parseFloat(cs.paddingRight) || 0;
 
     const boxW = el.clientWidth;
-    const spanW = span.scrollWidth; // includes padding, but padR is explicit
+    const spanW = span.scrollWidth;
 
     const overflow = spanW - boxW;
     if (overflow <= 1) {
@@ -203,13 +212,13 @@ function render(d) {
 
   const title = d.track_name;
   const meta = [d.artists?.join(", "), d.album].filter(Boolean).join(" - ");
-  const art = d.artwork_url || "";
+  const art  = resolveArtUrl(d);   
   const key = `${title}|${meta}|${art}`;
 
   if (key !== lastKey) {
     swapTextLikeOld(titleEl, title);
     swapTextLikeOld(metaEl, meta);
-    showArtworkWithFade(art);
+    showArtworkWithFade(art); 
     lastKey = key;
   } else {
     ensureSpan(titleEl).textContent = title;

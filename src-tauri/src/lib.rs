@@ -1,20 +1,25 @@
+use lofty::picture::{Picture, PictureType};
+use lofty::prelude::{Accessor, TaggedFileExt};
+use lofty::probe::Probe;
 use parking_lot::Mutex;
 use rspotify::{
     clients::{BaseClient, OAuthClient},
     model::{Image, PlayableItem},
     scopes, AuthCodePkceSpotify, Config, Credentials, OAuth, Token,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     fs,
     io::{Read, Write},
     net::TcpListener,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 use tauri::{Emitter, Manager, State};
 use tokio_util::sync::CancellationToken;
 use url::Url;
+use walkdir::WalkDir;
 
 #[derive(Default)]
 struct SpotifyStore {
@@ -22,6 +27,10 @@ struct SpotifyStore {
     client: Option<Arc<AuthCodePkceSpotify>>,
     watch_started: bool,
     cancel: Option<CancellationToken>,
+
+    local_art_dir: Option<PathBuf>,
+    art_cache: HashMap<String, String>, // album-key -> cached-art path
+    local_index: HashMap<String, PathBuf>,
 }
 
 type SharedStore = Arc<Mutex<SpotifyStore>>;
@@ -32,7 +41,136 @@ struct NowPlaying {
     track_name: Option<String>,
     artists: Vec<String>,
     album: Option<String>,
+    artwork_url: Option<String>,  // remote (Spotify) URL
+    artwork_path: Option<String>, // local file path, frontend will convert via convertFileSrc
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportPayload {
+    track_name: String,
+    artists: Vec<String>,
+    album: Option<String>,
     artwork_url: Option<String>,
+    artwork_path: Option<String>,
+}
+
+fn sanitize(s: &str) -> String {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let bad = ['/', '\\', ':', '*', '?', '"', '<', '>', '|', '\n', '\r'];
+    trimmed
+        .chars()
+        .map(|c| if bad.contains(&c) { '_' } else { c })
+        .collect()
+}
+
+fn build_local_index(dir: &Path) -> HashMap<String, PathBuf> {
+    let mut map = HashMap::new();
+
+    for entry in WalkDir::new(dir)
+        .follow_links(true)
+        .max_depth(20)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        let path = entry.path();
+        if !entry.file_type().is_file() || !is_audio(path) {
+            continue;
+        }
+
+        let tagged = match Probe::open(path).and_then(|p| p.read()) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+
+        // Prefer primary tag, fall back to first available.
+        let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
+        let (title, artist, album) = if let Some(t) = tag {
+            let title = t.title().map(|s| s.to_string()).unwrap_or_else(|| {
+                path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_string()
+            });
+            let artist = t
+                .artist()
+                .unwrap_or(std::borrow::Cow::Borrowed(""))
+                .to_string();
+            let album = t
+                .album()
+                .unwrap_or(std::borrow::Cow::Borrowed(""))
+                .to_string();
+            (title, artist, album)
+        } else {
+            let fallback = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            (fallback, String::new(), String::new())
+        };
+
+        if !title.is_empty() {
+            if !artist.is_empty() {
+                map.insert(key_title_artist(&title, &artist), path.to_path_buf());
+            }
+            if !album.is_empty() {
+                map.insert(key_title_album(&title, &album), path.to_path_buf());
+            }
+        }
+    }
+
+    map
+}
+
+fn extract_embedded_art_to_cache(app: &tauri::AppHandle, audio: &Path) -> Option<PathBuf> {
+    let tagged = Probe::open(audio).ok()?.read().ok()?;
+
+    // Pick a picture: prefer front cover, then any
+    let mut pic_opt: Option<&Picture> = None;
+    if let Some(t) = tagged.primary_tag() {
+        let pics = t.pictures();
+        pic_opt = pics
+            .iter()
+            .find(|p| matches!(p.pic_type(), PictureType::CoverFront | PictureType::Other))
+            .or_else(|| pics.first());
+    }
+    if pic_opt.is_none() {
+        if let Some(t) = tagged.first_tag() {
+            let pics = t.pictures();
+            pic_opt = pics
+                .iter()
+                .find(|p| matches!(p.pic_type(), PictureType::CoverFront | PictureType::Other))
+                .or_else(|| pics.first());
+        }
+    }
+    let pic = pic_opt?;
+
+    let bytes: &[u8] = pic.data().as_ref();
+
+    // Decide extension by MIME
+    let ext = match pic.mime_type().map(|m| m.as_str()) {
+        Some("image/jpeg") | Some("image/jpg") => "jpg",
+        Some("image/png") => "png",
+        Some("image/webp") => "webp",
+        _ => "jpg",
+    };
+
+    // Cache path under $APP/artcache/<sanitized audio path>.<ext>
+    let cache_dir = app.path().app_local_data_dir().ok()?.join("artcache");
+    let _ = fs::create_dir_all(&cache_dir);
+
+    // Make a deterministic filename from the audio path
+    let mut name = audio.to_string_lossy().to_string();
+    name = name.replace(['\\', '/', ':', '*', '?', '"', '<', '>', '|'], "_");
+
+    let out_path = cache_dir.join(format!("{}.{}", name, ext));
+    fs::write(&out_path, bytes).ok()?;
+
+    Some(out_path)
 }
 
 fn build_now_playing_from_ctx(ctx: &rspotify::model::CurrentlyPlayingContext) -> NowPlaying {
@@ -66,7 +204,49 @@ fn build_now_playing_from_ctx(ctx: &rspotify::model::CurrentlyPlayingContext) ->
         artists,
         album,
         artwork_url,
+        artwork_path: None,
     }
+}
+
+fn settings_path(window: &tauri::Window) -> Result<PathBuf, String> {
+    let dir = window
+        .app_handle()
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("app_local_data_dir: {e}"))?
+        .join("settings");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create dir: {e}"))?;
+    Ok(dir.join("settings.json"))
+}
+
+fn save_local_art_dir(window: &tauri::Window, path: &Path) -> Result<(), String> {
+    let p = settings_path(window)?;
+    let json = serde_json::json!({ "local_art_dir": path.to_string_lossy() });
+    fs::write(p, serde_json::to_vec(&json).unwrap()).map_err(|e| e.to_string())
+}
+
+fn load_local_art_dir(window: &tauri::Window) -> Option<PathBuf> {
+    let p = settings_path(window).ok()?;
+    let bytes = fs::read(p).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    v.get("local_art_dir")?.as_str().map(PathBuf::from)
+}
+
+fn settings_path_from_handle(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("app_local_data_dir: {e}"))?
+        .join("settings");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create dir: {e}"))?;
+    Ok(dir.join("settings.json"))
+}
+
+fn load_local_art_dir_from_handle(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let p = settings_path_from_handle(app).ok()?;
+    let bytes = fs::read(p).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    v.get("local_art_dir")?.as_str().map(PathBuf::from)
 }
 
 fn start_watcher_if_needed(app: &tauri::AppHandle, state: &SharedStore) {
@@ -112,15 +292,24 @@ fn start_watcher_if_needed(app: &tauri::AppHandle, state: &SharedStore) {
                   s.cancel = None;
                   return;
                 }
+                let app_handle = app.clone();
+
 
                 match client.current_user_playing_item().await {
                   Ok(Some(ctx)) => {
-                    let np = build_now_playing_from_ctx(&ctx);
+                    let mut np = build_now_playing_from_ctx(&ctx);
+                    maybe_set_local_artwork(&app_handle, &state_handle, &mut np, &ctx);
                     let _ = app.emit("now_playing_update", &np);
                   }
                   Ok(None) => {
                     let _ = app.emit("now_playing_update", &NowPlaying {
-                      is_playing: false, track_name: None, artists: vec![], album: None, artwork_url: None
+                      is_playing: false,
+                      track_name: None,
+                      artists: vec![],
+                      album: None,
+                      artwork_url: None,
+                      artwork_path: None,
+
                     });
                   }
                   Err(_) => {
@@ -212,6 +401,99 @@ fn clear_token_cache(window: &tauri::Window) -> Result<(), String> {
         std::fs::remove_file(&path).map_err(|e| format!("remove token file: {e}"))?;
     }
     Ok(())
+}
+
+#[tauri::command]
+async fn write_now_playing_assets(
+    _window: tauri::Window,
+    payload: ExportPayload,
+) -> Result<String, String> {
+    use std::fs;
+
+    let exe_dir = std::env::current_exe()
+        .map_err(|e| format!("current_exe: {e}"))?
+        .parent()
+        .ok_or_else(|| "Cannot resolve executable directory".to_string())?
+        .to_path_buf();
+
+    let dir = exe_dir.join("Exported-track");
+    fs::create_dir_all(&dir).map_err(|e| format!("create Exported-track: {e}"))?;
+
+    // --- write the text files ---
+    let song = sanitize(&payload.track_name);
+    let artists = sanitize(&payload.artists.join(", "));
+    let album = sanitize(payload.album.as_deref().unwrap_or(""));
+
+    fs::write(dir.join("song.txt"), song).map_err(|e| e.to_string())?;
+    fs::write(dir.join("artist.txt"), artists).map_err(|e| e.to_string())?;
+    fs::write(dir.join("album.txt"), album).map_err(|e| e.to_string())?;
+
+    // --- artwork -> PNG (prefer local path, else fetch URL) ---
+    let target = dir.join("artwork.png");
+
+    if let Some(ap) = payload.artwork_path.as_deref() {
+        if !ap.is_empty() && Path::new(ap).exists() {
+            if let Ok(img) = image::open(ap) {
+                img.save(&target).map_err(|e| e.to_string())?;
+                return Ok(dir.to_string_lossy().to_string());
+            }
+            if Path::new(ap)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map_or(false, |x| x.eq_ignore_ascii_case("png"))
+            {
+                fs::copy(ap, &target).map_err(|e| e.to_string())?;
+                return Ok(dir.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    if let Some(url) = payload.artwork_url.as_deref() {
+        if !url.is_empty() {
+            let bytes = reqwest::get(url).await.map_err(|e| e.to_string())?
+                .bytes().await.map_err(|e| e.to_string())?;
+            let img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+            img.save(&target).map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(dir.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn set_local_art_dir(
+    _state: State<'_, SharedStore>, // underscore to silence unused warning
+    window: tauri::Window,
+    path: String,
+) -> Result<(), String> {
+    let pb = PathBuf::from(path);
+    if !pb.is_dir() {
+        return Err("Not a directory".into());
+    }
+    save_local_art_dir(&window, &pb)?;
+
+    let app = window.app_handle().clone(); // ← clone fixes E0597
+    tauri::async_runtime::spawn_blocking(move || {
+        let idx = build_local_index(&pb);
+        let s = app.state::<SharedStore>();
+        let mut g = s.lock();
+        g.local_art_dir = Some(pb);
+        g.art_cache.clear();
+        g.local_index = idx;
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+fn get_local_art_dir(state: State<'_, SharedStore>, window: tauri::Window) -> Option<String> {
+    // prefer in-memory; else try disk
+    let mem = state
+        .lock()
+        .local_art_dir
+        .clone()
+        .or_else(|| load_local_art_dir(&window));
+    mem.map(|p| p.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -420,9 +702,246 @@ fn run_callback_server_blocking(
     Ok(())
 }
 
+fn norm(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect()
+}
+
+fn key_title_artist(title: &str, artist: &str) -> String {
+    format!("{}|{}", norm(title), norm(artist))
+}
+fn key_title_album(title: &str, album: &str) -> String {
+    format!("{}|{}", norm(title), norm(album))
+}
+
+fn is_audio(p: &Path) -> bool {
+    match p
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase())
+    {
+        Some(ref e)
+            if [
+                "aa", "aax", "aac", "aiff", "ape", "dsf", "flac", "m4a", "m4b", "m4p", "mp3",
+                "mpc", "mpp", "ogg", "oga", "wav", "wma", "wv", "webm",
+            ]
+            .contains(&e.as_str()) =>
+        {
+            true
+        }
+        _ => false,
+    }
+}
+
+fn try_common_names(dir: &Path) -> Option<PathBuf> {
+    const NAMES: &[&str] = &[
+        "cover.jpg",
+        "cover.png",
+        "folder.jpg",
+        "folder.png",
+        "front.jpg",
+        "front.png",
+        "album.jpg",
+        "album.png",
+        "art.jpg",
+        "art.png",
+    ];
+    for n in NAMES {
+        let p = dir.join(n);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn find_local_art_in_base(
+    base: &Path,
+    artist: &str,
+    album: Option<&str>,
+    track: &str,
+) -> Option<PathBuf> {
+    let a_norm = norm(artist);
+    let alb_norm = album.as_ref().map(|s| norm(s));
+    let t_norm = norm(track);
+
+    // 0) quick sanity
+    if !base.is_dir() {
+        return None;
+    }
+
+    // 1) Prefer directories that look like the album/artist/track and check common names there.
+    //    Go a bit deeper to handle things like "(Mixtapes)/Burn After Rolling".
+    for entry in walkdir::WalkDir::new(base)
+        .follow_links(true)
+        .max_depth(8)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_dir())
+    {
+        let name = entry.path().file_name().and_then(|n| n.to_str()).map(norm);
+
+        if let Some(n) = name {
+            let looks_like_album = alb_norm
+                .as_deref()
+                .map(|alb| n.contains(alb))
+                .unwrap_or(false);
+            let looks_like_artist = n.contains(&a_norm);
+            let looks_like_track = n.contains(&t_norm);
+
+            if looks_like_album || looks_like_artist || looks_like_track {
+                if let Some(p) = try_common_names(entry.path()) {
+                    return Some(p);
+                }
+            }
+        }
+    }
+
+    // 2) Broader file scan (still bounded). Accept if the parent OR grandparent looks like album/artist/track,
+    //    or if the filename itself looks like it.
+    for entry in walkdir::WalkDir::new(base)
+        .follow_links(true)
+        .max_depth(8)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let ext_ok = matches!(
+            entry.path().extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()),
+            Some(ref e) if ["jpg","jpeg","png","webp"].contains(&e.as_str())
+        );
+        if !ext_ok {
+            continue;
+        }
+
+        // parent dir
+        let parent_norm = entry
+            .path()
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .map(norm)
+            .unwrap_or_default();
+
+        // grandparent dir (optional)
+        let gp_norm = entry
+            .path()
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .map(norm)
+            .unwrap_or_default();
+
+        // filename (without extension)
+        let stem_norm = entry
+            .path()
+            .file_stem()
+            .and_then(|n| n.to_str())
+            .map(norm)
+            .unwrap_or_default();
+
+        let matches_dirs = parent_norm.contains(&a_norm)
+            || parent_norm.contains(&t_norm)
+            || alb_norm
+                .as_deref()
+                .map(|alb| parent_norm.contains(alb))
+                .unwrap_or(false)
+            || gp_norm.contains(&a_norm)
+            || gp_norm.contains(&t_norm)
+            || alb_norm
+                .as_deref()
+                .map(|alb| gp_norm.contains(alb))
+                .unwrap_or(false);
+
+        let matches_name = stem_norm.contains(&a_norm)
+            || stem_norm.contains(&t_norm)
+            || alb_norm
+                .as_deref()
+                .map(|alb| stem_norm.contains(alb))
+                .unwrap_or(false);
+
+        if matches_dirs || matches_name {
+            return Some(entry.path().to_path_buf());
+        }
+    }
+
+    None
+}
+
+fn maybe_set_local_artwork(
+    app: &tauri::AppHandle,
+    state: &SharedStore,
+    np: &mut NowPlaying,
+    ctx: &rspotify::model::CurrentlyPlayingContext,
+) {
+    // Already has Spotify art?
+    if np.artwork_url.is_some() {
+        return;
+    }
+
+    let (artist, album, track, _is_local) = match &ctx.item {
+        Some(PlayableItem::Track(t)) => {
+            let first_artist = t.artists.get(0).map(|a| a.name.as_str()).unwrap_or("");
+            (
+                first_artist.to_string(),
+                Some(t.album.name.clone()),
+                t.name.clone(),
+                t.is_local,
+            )
+        }
+        _ => return,
+    };
+
+    // Use the local index first
+    let (base_dir, idx_hit) = {
+        let s = state.lock();
+        let base = s.local_art_dir.clone();
+
+        let k1 = key_title_artist(&track, &artist);
+
+        let hit = s.local_index.get(&k1).cloned().or_else(|| {
+            album.as_deref().and_then(|alb| {
+                let k2 = key_title_album(&track, alb);
+                s.local_index.get(&k2).cloned()
+            })
+        });
+
+        (base, hit)
+    };
+
+    if let Some(audio_path) = idx_hit {
+        // Prefer embedded art
+        if let Some(out) = extract_embedded_art_to_cache(app, &audio_path) {
+            np.artwork_path = Some(out.to_string_lossy().to_string());
+            return;
+        }
+        // Sidecar cover.* in the same folder
+        if let Some(dir) = audio_path.parent() {
+            if let Some(sidecar) = try_common_names(dir) {
+                np.artwork_path = Some(sidecar.to_string_lossy().to_string());
+                return;
+            }
+        }
+    }
+
+    // Fallback: your previous best-effort scan using base_dir (if set)
+    if let Some(base) = base_dir {
+        if let Some(found) = find_local_art_in_base(&base, &artist, album.as_deref(), &track) {
+            np.artwork_path = Some(found.to_string_lossy().to_string());
+        }
+    }
+}
+
 #[tauri::command]
-async fn get_current_playing(state: State<'_, SharedStore>) -> Result<NowPlaying, String> {
-    // Clone an Arc so the lock is dropped BEFORE we await (fixes !Send error)
+async fn get_current_playing(
+    state: State<'_, SharedStore>,
+    window: tauri::Window,
+) -> Result<NowPlaying, String> {
     let client = {
         let guard = state.lock();
         guard
@@ -431,52 +950,25 @@ async fn get_current_playing(state: State<'_, SharedStore>) -> Result<NowPlaying
             .ok_or_else(|| "Not connected to Spotify".to_string())?
     };
 
-    let playing = client
+    match client
         .current_user_playing_item()
         .await
-        .map_err(|e| e.to_string())?;
-
-    if let Some(ctx) = playing {
-        let is_playing = ctx.is_playing;
-
-        let mut track_name = None;
-        let mut artists = Vec::new();
-        let mut album = None;
-        let mut artwork_url = None;
-
-        if let Some(item) = ctx.item {
-            match item {
-                PlayableItem::Track(track) => {
-                    track_name = Some(track.name.clone());
-                    artists = track.artists.into_iter().map(|a| a.name).collect();
-                    album = Some(track.album.name.clone());
-                    artwork_url = pick_image_url(&track.album.images, 300);
-                }
-                PlayableItem::Episode(ep) => {
-                    // In case user is listening to a podcast episode
-                    track_name = Some(ep.name.clone());
-                    album = Some(ep.show.name.clone());
-                    artists = vec![ep.show.publisher.clone()];
-                    artwork_url = pick_image_url(&ep.images, 300);
-                }
-            }
+        .map_err(|e| e.to_string())?
+    {
+        Some(ctx) => {
+            let mut np = build_now_playing_from_ctx(&ctx);
+            let app = window.app_handle();
+            maybe_set_local_artwork(&app, &state, &mut np, &ctx);
+            Ok(np)
         }
-
-        Ok(NowPlaying {
-            is_playing,
-            track_name,
-            artists,
-            album,
-            artwork_url,
-        })
-    } else {
-        Ok(NowPlaying {
+        None => Ok(NowPlaying {
             is_playing: false,
             track_name: None,
-            artists: Vec::new(),
+            artists: vec![],
             album: None,
             artwork_url: None,
-        })
+            artwork_path: None,
+        }),
     }
 }
 
@@ -486,21 +978,42 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(store)
         .setup(|app| {
-            // Load .env from the app's bundled resources dir
             if let Ok(env_path) = app
                 .path()
                 .resolve(".env", tauri::path::BaseDirectory::Resource)
             {
                 let _ = dotenvy::from_path(env_path);
             }
+
+            let store = app.state::<SharedStore>();
+            if let Some(dir) = load_local_art_dir_from_handle(&app.app_handle()) {
+                {
+                    store.lock().local_art_dir = Some(dir.clone());
+                }
+
+                // Build the local index on startup so embedded/sidecar art works right away
+                let app_handle = app.app_handle().clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let idx = build_local_index(&dir);
+                    let s = app_handle.state::<SharedStore>();
+                    let mut g = s.lock();
+                    g.local_index = idx;
+                    g.art_cache.clear();
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             connect_spotify,
             restore_spotify,
-            get_current_playing
+            get_current_playing,
+            set_local_art_dir,
+            get_local_art_dir,
+            write_now_playing_assets,
         ])
         .on_window_event(|window, event| {
             use tauri::WindowEvent;
