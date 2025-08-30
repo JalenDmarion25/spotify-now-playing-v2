@@ -6,6 +6,8 @@ body {
     -webkit-app-region: drag;
     width: 100%;
     height: 100%;
+    background-color: #2f2f2f;
+
 }
 
 
@@ -31,7 +33,7 @@ body {
 
 /* Start slightly right (like 290px in the old code), end fully past left */
 @keyframes loop-marquee {
-  from { transform: translateX(var(--loop-start, 260px)); }
+  from { transform: translateX(var(--loop-start, 290px)); }
   to   { transform: translateX(calc(-1 * (var(--loop-end, 0px)))); }
 }
 
@@ -52,7 +54,6 @@ body {
     opacity: 0;
     visibility: hidden;
     transition: opacity 660ms ease;
-    margin-right: 5px;
 }
 
 #artwork.show {
@@ -102,7 +103,6 @@ body {
 
 @media (prefers-color-scheme: dark) {
   :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
+    color: transparent;
   }
 }

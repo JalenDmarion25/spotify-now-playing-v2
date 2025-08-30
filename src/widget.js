@@ -146,7 +146,7 @@ function applyLoopIfOverflow(el) {
     }
 
     // mimic the “start right, end fully left”
-    const START = 260;  // adjust to your layout
+    const START = 295;  // adjust to your layout
     const GAP   = 24;
 
     span.style.setProperty('--loop-start', `${START}px`);
