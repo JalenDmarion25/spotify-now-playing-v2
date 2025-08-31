@@ -211,7 +211,8 @@ function render(d) {
   slidePanel(true);
 
   const title = d.track_name;
-  const meta = [d.artists?.join(", "), d.album].filter(Boolean).join(" - ");
+  const meta = d.artists;
+  // const meta = [d.artists?.join(", "), d.album].filter(Boolean).join(" - ");
   const art  = resolveArtUrl(d);   
   const key = `${title}|${meta}|${art}`;
 
