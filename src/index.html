@@ -8,29 +8,39 @@
     <script type="module" src="/main.js" defer></script>
   </head>
 
-  <body>
-    <main class="container">
-      <p>Click to Connect</p>
+  <main class="container">
+    <p>Click to Connect</p>
 
-      <form class="row" id="connect-form">
-        <button type="submit">Connect</button>
-      </form>
-      <div class="row">
-        <button id="choose-folder" type="button">Choose Music Folder</button>
-      </div>
+    <form class="row" id="connect-form">
+      <button type="submit">Connect</button>
+    </form>
 
-      <div class="row">
-        <button id="open-widget" type="button">Open Widget Window</button>
-      </div>
-      <div class="row">
-        <label style="display:flex;gap:.5rem;align-items:center;justify-content:center">
-          <input id="export-toggle" type="checkbox" />
-          Export Track
-        </label>
-      </div>
+    <div class="row">
+      <button id="open-settings" type="button">Open Settings</button>
+    </div>
 
-      <p id="status"></p>
-      <p id="local-dir"></p>
-    </main>
-  </body>
+    <div class="row">
+      <button id="choose-folder" type="button">Choose Music Folder</button>
+    </div>
+
+    <div class="row">
+      <button id="open-widget" type="button">Open Widget Window</button>
+    </div>
+    <div class="row">
+      <label
+        style="
+          display: flex;
+          gap: 0.5rem;
+          align-items: center;
+          justify-content: center;
+        "
+      >
+        <input id="export-toggle" type="checkbox" />
+        Export Track
+      </label>
+    </div>
+
+    <p id="status"></p>
+    <p id="local-dir"></p>
+  </main>
 </html>

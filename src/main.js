@@ -9,6 +9,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   const nowPlayingEl = document.getElementById("now-playing"); // may be null
   const artworkEl = document.getElementById("artwork"); // may be null
   const exportToggle = document.getElementById("export-toggle");
+  const THEME_KEYS = {
+    bg: "theme:bg",
+    title: "theme:title",
+    meta: "theme:meta",
+  };
 
   let exportEnabled = JSON.parse(
     localStorage.getItem("exportEnabled") || "false"
@@ -23,6 +28,52 @@ document.addEventListener("DOMContentLoaded", async () => {
       ? `Local folder set: ${dir}`
       : "Art folder: (none set)";
   };
+
+  function getTheme() {
+    return {
+      bg: localStorage.getItem(THEME_KEYS.bg) || "#2f2f2f",
+      title: localStorage.getItem(THEME_KEYS.title) || "#00cf00",
+      meta: localStorage.getItem(THEME_KEYS.meta) || "#ffffff",
+    };
+  }
+  function setTheme(theme) {
+    localStorage.setItem(THEME_KEYS.bg, theme.bg);
+    localStorage.setItem(THEME_KEYS.title, theme.title);
+    localStorage.setItem(THEME_KEYS.meta, theme.meta);
+  }
+  function applyThemeToMain() {
+    document.body.style.backgroundColor = "#2f2f2f";
+  }
+
+  async function broadcastTheme(theme) {
+    try {
+      await window.__TAURI__.event.emit("theme_update", theme);
+    } catch {}
+  }
+
+  // Seed others (widget/settings) with current theme
+  broadcastTheme(getTheme());
+
+  // Seed main window & broadcast once on boot
+  const bootTheme = getTheme();
+  applyThemeToMain(bootTheme);
+  broadcastTheme(bootTheme);
+
+  // Respond when someone asks for the current theme (widget/settings)
+  await listen("request_theme", async () => {
+    await broadcastTheme(getTheme());
+  });
+
+  // Persist changes coming from the settings window, then broadcast
+  await listen("theme_change", async (evt) => {
+    const next = {
+      bg: evt?.payload?.bg || "#2f2f2f",
+      title: evt?.payload?.title || "#00cf00",
+      meta: evt?.payload?.meta || "#ffffff",
+    };
+    setTheme(next);
+    await broadcastTheme(next);
+  });
 
   async function ensureExportDir() {
     if (exportDir) return exportDir;
@@ -51,20 +102,20 @@ document.addEventListener("DOMContentLoaded", async () => {
       (d?.artists || []).join(","),
       d?.album || "",
     ].join("||");
-  } 
+  }
 
-async function exportCurrent(d) {
-  if (!d) return;
-  const exportedTo = await invoke("write_now_playing_assets", {
-    payload: {
-      trackName: d.track_name || "",
-      artists: d.artists || [],
-      album: d.album || null,
-      artworkUrl: d.artwork_url || null,
-      artworkPath: d.artwork_path || null,
-    },
-  });
-}
+  async function exportCurrent(d) {
+    if (!d) return;
+    const exportedTo = await invoke("write_now_playing_assets", {
+      payload: {
+        trackName: d.track_name || "",
+        artists: d.artists || [],
+        album: d.album || null,
+        artworkUrl: d.artwork_url || null,
+        artworkPath: d.artwork_path || null,
+      },
+    });
+  }
 
   function maybeExport(d) {
     if (!exportEnabled || !d || !d.is_playing) return;
@@ -294,10 +345,12 @@ async function exportCurrent(d) {
         resizable: false,
         maximizable: false,
         decorations: false,
+        transparent: true,
       });
 
       widgetWin.once("tauri://created", async () => {
         await setWidgetBtnState();
+        await broadcastTheme(getTheme());
         widgetWin.setFocus().catch(() => {});
       });
       widgetWin.once("tauri://destroyed", async () => {
@@ -345,5 +398,52 @@ async function exportCurrent(d) {
     // Keep label synced if something else opens/closes the widget
     const _syncInterval = setInterval(setWidgetBtnState, 1000);
     window.addEventListener("beforeunload", () => clearInterval(_syncInterval));
+  }
+
+  const openSettingsBtn = document.getElementById("open-settings");
+  if (openSettingsBtn) {
+    async function findSettings() {
+      try {
+        if (typeof WebviewWindow.getByLabel === "function") {
+          const maybe = WebviewWindow.getByLabel("settings");
+          return typeof maybe?.then === "function" ? await maybe : maybe;
+        } else if (typeof getAll === "function") {
+          const list = await getAll();
+          return (list || []).find((w) => w.label === "settings") || null;
+        }
+      } catch (e) {
+        console.error("[settings] lookup failed:", e);
+      }
+      return null;
+    }
+
+    openSettingsBtn.addEventListener("click", async () => {
+      const existing = await findSettings();
+      if (existing) {
+        try {
+          await existing.setFocus();
+        } catch {}
+        return;
+      }
+
+      const url = new URL("settings.html", window.location.href).toString();
+      const win = new WebviewWindow("settings", {
+        url,
+        title: "Settings",
+        width: 380,
+        height: 220,
+        resizable: false,
+        maximizable: false,
+        decorations: true,
+        transparent: false,
+      });
+
+      win.once("tauri://created", () => {
+        console.log("[settings] created");
+      });
+      win.once("tauri://error", (e) => {
+        console.error("[settings] failed to open:", e);
+      });
+    });
   }
 });
