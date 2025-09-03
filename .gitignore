@@ -16,9 +16,13 @@ dist-ssr
 .vscode/*
 !.vscode/extensions.json
 .idea
+.target
 .DS_Store
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+*.env
+*.spotify_token_cache.json
+*.TAG
