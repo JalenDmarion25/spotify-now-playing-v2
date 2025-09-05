@@ -147,11 +147,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     const restored = await invoke("restore_spotify");
     if (restored) {
       setStatus("Connected!!!", "connected");
+      console.log("Restore: ", restored)
     } else {
       setStatus("Not connected", "not-connected");
+            console.log("Restore: ", restored)
+
     }
   } catch {
     setStatus("Not connected", "not-connected");
+          console.log("Restore Catch: ", restored)
+
   }
 
   // load and display the saved folder on startup
@@ -233,6 +238,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   await listen("auth_lost", () => {
     setStatus("Not connected", "not-connected");
+    console.log("Auth Lost not conn")
     if (nowPlayingEl)
       nowPlayingEl.textContent = "Nothing is currently playing.";
     if (artworkEl) artworkEl.style.display = "none";
@@ -256,17 +262,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  // restore session
-  try {
-    const restored = await invoke("restore_spotify");
-    if (restored) {
-      setStatus("Connected!!!", "connected");
-    } else {
-      setStatus("Not connected", "not-connected");
-    }
-  } catch {
-    setStatus("Not connected", "not-connected");
-  }
 
   // connect button
   const form = document.getElementById("connect-form");
