@@ -12,6 +12,21 @@ dist
 dist-ssr
 *.local
 
+# Node / frontend
+node_modules/
+dist/
+dist-ssr/
+out/
+
+# Tauri build outputs
+/src-tauri/target/
+src-tauri/Cargo.lock
+
+# Environment variables (never commit!)
+*.env
+.env.*
+!env.example   # keep a template if needed
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
