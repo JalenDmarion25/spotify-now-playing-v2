@@ -7,6 +7,8 @@ A widget that displays whats currently playing for the user
 
 ![Image preview](https://github.com/JalenDmarion25/spotify-now-playing-v2/blob/main/visual_example.png?raw=true)
 
+![gif_preview](https://github.com/JalenDmarion25/spotify-now-playing-v2/blob/main/20250916-0317-48.0952624.gif?raw=true)
+
 ## Support/Bug Report
 
 To Report a Bug please contact this email fake@fake.com.
