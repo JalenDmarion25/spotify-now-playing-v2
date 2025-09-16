@@ -1,6 +1,6 @@
 # Now Playing
 
-![Logo](<img width="310" height="310" alt="Square310x310Logo" src="https://github.com/user-attachments/assets/656b6ef1-491b-460d-ab8b-39ebf8e8c7dc" />)
+<img width="310" height="310" alt="Square310x310Logo" src="https://github.com/user-attachments/assets/656b6ef1-491b-460d-ab8b-39ebf8e8c7dc" />
 
 A widget that displays whats currently playing for the user
 
