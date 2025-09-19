@@ -147,16 +147,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     const restored = await invoke("restore_spotify");
     if (restored) {
       setStatus("Connected!!!", "connected");
-      console.log("Restore: ", restored)
+      console.log("Restore: ", restored);
     } else {
       setStatus("Not connected", "not-connected");
-            console.log("Restore: ", restored)
-
+      console.log("Restore: ", restored);
     }
-  } catch {
+  } catch (e) {
     setStatus("Not connected", "not-connected");
-          console.log("Restore Catch: ", restored)
-
+    console.log("Restore Catch:", e);
   }
 
   // load and display the saved folder on startup
@@ -174,18 +172,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   function renderNowPlaying(d) {
-    if (!artworkEl) return; // element not present, nothing to do
+    if (!artworkEl) return;
 
+    // reset visuals
     artworkEl.style.display = "none";
     artworkEl.removeAttribute("src");
     if (nowPlayingEl) nowPlayingEl.textContent = "";
 
+    // nothing playing
     if (!d || !d.is_playing || (!d.artwork_url && !d.artwork_path)) {
       if (nowPlayingEl)
         nowPlayingEl.textContent = "Nothing is currently playing.";
       return;
     }
 
+    // show text
     if (d.track_name && nowPlayingEl) {
       const artists = (d.artists || []).join(", ");
       const album = d.album ? ` — ${d.album}` : "";
@@ -194,40 +195,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       }${album}`;
     }
 
-    if (d.artwork_url) {
-      artworkEl.src = d.artwork_url;
-    } else if (d.artwork_path) {
-      artworkEl.src = convertFileSrc(d.artwork_path);
-    }
+    // show art
+    if (d.artwork_url) artworkEl.src = d.artwork_url;
+    else if (d.artwork_path) artworkEl.src = convertFileSrc(d.artwork_path);
     artworkEl.style.display = "block";
 
     maybeExport(d);
-
-    if (nowPlayingEl) nowPlayingEl.textContent = "";
-    if (artworkEl) {
-      artworkEl.style.display = "none";
-      artworkEl.removeAttribute("src");
-    }
-
-    if (!d || !d.is_playing || (!d.artwork_url && !d.artwork_path)) {
-      if (nowPlayingEl)
-        nowPlayingEl.textContent = "Nothing is currently playing.";
-      return;
-    }
-
-    if (d.track_name && nowPlayingEl) {
-      const artists = (d.artists || []).join(", ");
-      const album = d.album ? ` — ${d.album}` : "";
-      nowPlayingEl.textContent = `▶ ${d.track_name}${
-        artists ? " — " + artists : ""
-      }${album}`;
-    }
-
-    if (artworkEl) {
-      if (d.artwork_url) artworkEl.src = d.artwork_url;
-      else if (d.artwork_path) artworkEl.src = convertFileSrc(d.artwork_path);
-      artworkEl.style.display = "block";
-    }
   }
 
   // events
@@ -236,9 +209,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     renderNowPlaying(d);
     await maybeExport(d); // <-- auto export on every change while checked
   });
-  await listen("auth_lost", () => {
+  await listen("auth_lost", async () => {
+    try {
+      const ok = await invoke("restore_spotify");
+      if (ok) {
+        setStatus("Connected!!!", "connected");
+        return;
+      }
+    } catch {}
     setStatus("Not connected", "not-connected");
-    console.log("Auth Lost not conn")
     if (nowPlayingEl)
       nowPlayingEl.textContent = "Nothing is currently playing.";
     if (artworkEl) artworkEl.style.display = "none";
@@ -261,7 +240,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     });
   }
-
 
   // connect button
   const form = document.getElementById("connect-form");

@@ -312,15 +312,23 @@ fn start_watcher_if_needed(app: &tauri::AppHandle, state: &SharedStore) {
 
                     });
                   }
-                  Err(_) => {
-                    // treat as fatal (likely revoked / invalid)
-                    let _ = app.emit("auth_lost", &());
-                    let mut s = state_handle.lock();
-                    s.client = None;
-                    s.watch_started = false;
-                    s.cancel = None;
-                    return;
-                  }
+                    Err(e) => {
+                        // Transient API error (rate limit, network, 5xx, device issues, etc.)
+                        // Don't mark auth lost; just keep polling.
+                        // Optionally: if you can inspect the HTTP status and it's a hard 401 and reauth fails,
+                        // then treat as fatal.
+                        eprintln!("[poll] now_playing error: {e}");
+                        // Emit a benign "nothing playing" or skip emitting anything:
+                        let _ = app.emit("now_playing_update", &NowPlaying {
+                            is_playing: false,
+                            track_name: None,
+                            artists: vec![],
+                            album: None,
+                            artwork_url: None,
+                            artwork_path: None,
+                        });
+                        // then fall through to the sleep and next loop iteration
+                    }
                 }
 
                 sleep(Duration::from_secs(2)).await;
@@ -450,8 +458,12 @@ async fn write_now_playing_assets(
 
     if let Some(url) = payload.artwork_url.as_deref() {
         if !url.is_empty() {
-            let bytes = reqwest::get(url).await.map_err(|e| e.to_string())?
-                .bytes().await.map_err(|e| e.to_string())?;
+            let bytes = reqwest::get(url)
+                .await
+                .map_err(|e| e.to_string())?
+                .bytes()
+                .await
+                .map_err(|e| e.to_string())?;
             let img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
             img.save(&target).map_err(|e| e.to_string())?;
         }
