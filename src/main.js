@@ -9,6 +9,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   const nowPlayingEl = document.getElementById("now-playing"); // may be null
   const artworkEl = document.getElementById("artwork"); // may be null
   const exportToggle = document.getElementById("export-toggle");
+  const out = await window.__TAURI__.core.invoke("debug_gsmtc");
+  console.log("[GSMTC Debug]", out);
+
   const THEME_KEYS = {
     bg: "theme:bg",
     title: "theme:title",
