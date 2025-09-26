@@ -41,5 +41,6 @@ reqwest = "0.12.23"
 windows = { version = "0.62.0", features = [
   "Foundation",
   "Media",
-  "Media_Control"
+  "Media_Control",
+  "Storage_Streams",
 ] }

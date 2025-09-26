@@ -9,8 +9,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   const nowPlayingEl = document.getElementById("now-playing"); // may be null
   const artworkEl = document.getElementById("artwork"); // may be null
   const exportToggle = document.getElementById("export-toggle");
-  const out = await window.__TAURI__.core.invoke("debug_gsmtc");
-  console.log("[GSMTC Debug]", out);
+  const out = await window.__TAURI__.core.invoke("get_current_playing_gsmtc");
+  console.log("[GSMTC View]", out);
 
   // --- Poll GSMTC and log when the track changes ---
   let lastGSMTCKey = "";
@@ -34,13 +34,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   async function pollGSMTC() {
     try {
-      const d = await window.__TAURI__.core.invoke("debug_gsmtc");
+      const d = await window.__TAURI__.core.invoke("get_current_playing_gsmtc");
       const key = gsmKey(d);
       if (key && key !== lastGSMTCKey) {
         lastGSMTCKey = key;
         console.log(
-          `[GSMTC] Now playing: ${d?.title || "?"} — ${d?.artist || "?"}${
-            d?.album ? ` (${d.album})` : ""
+          `[GSMTC] Now playing: Song: ${d?.title || "?"} — Artist: ${d?.artist || "?"}${
+            d?.album ? ` — Album: ${d.album}` : ""
           }`
         );
       }

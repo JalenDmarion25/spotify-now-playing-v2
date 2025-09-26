@@ -562,7 +562,7 @@ async fn restore_spotify(
 static LAST_GSMTC_TRACK: OnceLock<StdMutex<Option<String>>> = OnceLock::new();
 
 #[tauri::command]
-async fn debug_gsmtc(window: tauri::Window) -> Result<serde_json::Value, String> {
+async fn get_current_playing_gsmtc(window: tauri::Window) -> Result<serde_json::Value, String> {
     use windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
 
     let mgr = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
@@ -1130,7 +1130,7 @@ pub fn run() {
             set_local_art_dir,
             get_local_art_dir,
             write_now_playing_assets,
-            debug_gsmtc,
+            get_current_playing_gsmtc,
         ])
         .on_window_event(|window, event| {
             use tauri::WindowEvent;
