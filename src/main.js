@@ -9,6 +9,54 @@ document.addEventListener("DOMContentLoaded", async () => {
   const nowPlayingEl = document.getElementById("now-playing"); // may be null
   const artworkEl = document.getElementById("artwork"); // may be null
   const exportToggle = document.getElementById("export-toggle");
+  const out = await window.__TAURI__.core.invoke("get_current_playing_gsmtc");
+  console.log("[GSMTC View]", out);
+
+  // --- Poll GSMTC and log when the track changes ---
+  let lastGSMTCKey = "";
+
+  function gsmKey(d) {
+    // Only log if we actually have a "playing" track
+    const isPlaying =
+      (d?.status || "").toLowerCase() === "playing" ||
+      (d?.status || "").toLowerCase() === "paused" || // include paused so seek/next still logs
+      d?.position_ms != null;
+
+    if (!isPlaying) return null;
+
+    const title = (d?.title || "").trim();
+    const artist = (d?.artist || "").trim();
+    const album = (d?.album || "").trim();
+    if (!title && !artist && !album) return null;
+
+    return [title, artist, album].join("||").toLowerCase();
+  }
+
+  async function pollGSMTC() {
+    try {
+      const d = await window.__TAURI__.core.invoke("get_current_playing_gsmtc");
+      const key = gsmKey(d);
+      if (key && key !== lastGSMTCKey) {
+        lastGSMTCKey = key;
+        console.log(
+          `[GSMTC] Now playing: Song: ${d?.title || "?"} — Artist: ${d?.artist || "?"}${
+            d?.album ? ` — Album: ${d.album}` : ""
+          }`
+        );
+      }
+    } catch (e) {
+      // Optional: quiet errors (e.g., no active session)
+      // console.debug("[GSMTC] poll error:", e);
+    }
+  }
+
+  // kick off immediately, then poll every 2s
+  pollGSMTC();
+  const gsmPoll = setInterval(pollGSMTC, 2000);
+
+  // (optional) stop polling when page unloads
+  window.addEventListener("beforeunload", () => clearInterval(gsmPoll));
+
   const THEME_KEYS = {
     bg: "theme:bg",
     title: "theme:title",
