@@ -1,13 +1,15 @@
 use lofty::picture::{Picture, PictureType};
 use lofty::prelude::{Accessor, TaggedFileExt};
 use lofty::probe::Probe;
-use parking_lot::Mutex;
+use parking_lot::lock_api::Mutex;
+use parking_lot::Mutex as PlMutex;
 use rspotify::{
     clients::{BaseClient, OAuthClient},
     model::{Image, PlayableItem},
     scopes, AuthCodePkceSpotify, Config, Credentials, OAuth, Token,
 };
 use serde::{Deserialize, Serialize};
+use std::sync::{Mutex as StdMutex, OnceLock};
 use std::{
     collections::HashMap,
     fs,
@@ -21,8 +23,7 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 use walkdir::WalkDir;
 use windows::Media::Control::{
-    GlobalSystemMediaTransportControlsSessionManager,
-    GlobalSystemMediaTransportControlsSessionPlaybackStatus,
+    GlobalSystemMediaTransportControlsSession
 };
 
 #[derive(Default)]
@@ -37,7 +38,7 @@ struct SpotifyStore {
     local_index: HashMap<String, PathBuf>,
 }
 
-type SharedStore = Arc<Mutex<SpotifyStore>>;
+type SharedStore = Arc<PlMutex<SpotifyStore>>;
 
 #[derive(Serialize)]
 struct NowPlaying {
@@ -558,82 +559,104 @@ async fn restore_spotify(
     Ok(false)
 }
 
+static LAST_GSMTC_TRACK: OnceLock<StdMutex<Option<String>>> = OnceLock::new();
+
 #[tauri::command]
-async fn debug_gsmtc() -> Result<serde_json::Value, String> {
-    use windows::Media::Control::{
-        GlobalSystemMediaTransportControlsSessionManager,
-        GlobalSystemMediaTransportControlsSessionPlaybackStatus,
-    };
+async fn debug_gsmtc(window: tauri::Window) -> Result<serde_json::Value, String> {
+    use windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
 
     let mgr = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
         .map_err(|e| format!("RequestAsync failed: {:?}", e))?
         .await
         .map_err(|e| format!("Await manager failed: {:?}", e))?;
 
-    let Some(session) = mgr.GetCurrentSession().ok() else {
+    // ---- pick the Spotify session if present
+    let session: Option<GlobalSystemMediaTransportControlsSession> = match mgr.GetSessions() {
+        Ok(list) => {
+            let n = list.Size().unwrap_or(0);
+            let mut picked = None;
+            for i in 0..n {
+                if let Ok(s) = list.GetAt(i) {
+                    if let Ok(aumid) = s.SourceAppUserModelId() {
+                        if aumid.to_string().to_ascii_lowercase().contains("spotify") {
+                            picked = Some(s);
+                            break;
+                        }
+                    }
+                }
+            }
+            // fallback to current session if Spotify not found
+            picked.or_else(|| mgr.GetCurrentSession().ok())
+        }
+        Err(_) => mgr.GetCurrentSession().ok(),
+    };
+
+    let Some(session) = session else {
         return Ok(serde_json::json!({"error": "No active session"}));
     };
 
-    // Playback status
-    let status = session.GetPlaybackInfo()
+    // status
+    let status = session
+        .GetPlaybackInfo()
         .ok()
         .and_then(|info| info.PlaybackStatus().ok())
         .map(|s| format!("{:?}", s))
         .unwrap_or_else(|| "Unknown".to_string());
 
-    // Media properties
-    let props = session.TryGetMediaPropertiesAsync()
+    // media props
+    let props = session
+        .TryGetMediaPropertiesAsync()
         .map_err(|e| format!("TryGetMediaPropertiesAsync: {:?}", e))?
         .await
         .map_err(|e| format!("await media properties: {:?}", e))?;
 
-    let title  = props.Title().unwrap_or_default().to_string();
-    let album  = props.AlbumTitle().unwrap_or_default().to_string();
+    let title = props.Title().unwrap_or_default().to_string();
+    let album = props.AlbumTitle().unwrap_or_default().to_string();
     let artist = props.Artist().unwrap_or_default().to_string();
 
-    // Genres: Result<IVectorView<HSTRING>>
-    let genres: Vec<String> = match props.Genres() {
-        Ok(view) => {
-            let size = view.Size().unwrap_or(0);
-            (0..size)
-                .filter_map(|i| view.GetAt(i).ok().map(|h| h.to_string()))
-                .collect()
-        }
-        Err(_) => Vec::new(),
-    };
-
-    // Timeline: Result<GlobalSystemMediaTransportControlsSessionTimelineProperties>
+    // timeline (safe to read synchronously)
     let (position_ms, end_time_ms, last_updated_iso) = match session.GetTimelineProperties() {
         Ok(tl) => {
-            // Each property is Result<TimeSpan>; TimeSpan has a `Duration: i64` field
             let pos_ms = tl.Position().ok().map(|ts| ts.Duration / 10_000);
             let end_ms = tl.EndTime().ok().map(|ts| ts.Duration / 10_000);
-
-            // LastUpdatedTime is Result<DateTime>, convert to RFC3339-ish string (ticks are 100ns; here we just expose raw)
             let last_updated = tl.LastUpdatedTime().ok().map(|dt| format!("{:?}", dt));
             (pos_ms, end_ms, last_updated)
         }
         Err(_) => (None, None, None),
     };
 
-    let json = serde_json::json!({
+    let payload = serde_json::json!({
         "status": status,
         "title": title,
         "album": album,
         "artist": artist,
-        "genres": genres,
-        "track_number": props.TrackNumber().unwrap_or(0),
-        "album_track_count": props.AlbumTrackCount().unwrap_or(0),
         "position_ms": position_ms,
         "end_time_ms": end_time_ms,
         "last_updated": last_updated_iso,
         "source_app_id": session.SourceAppUserModelId().ok().map(|s| s.to_string())
     });
 
-    println!("[DEBUG GSMTC] {json}");
-    Ok(json)
-}
+    // ---- change detection + emit
+    let key = format!("{}|{}|{}", title, artist, album);
 
+    // get or init a std::sync::Mutex so lock() -> Result<..>
+    let cell = LAST_GSMTC_TRACK.get_or_init(|| StdMutex::new(None));
+    let mut guard = cell.lock().unwrap();
+
+    // compare without as_deref to avoid type mismatches
+    let is_new = match &*guard {
+        Some(prev) => prev != &key,
+        None => true,
+    };
+
+    if is_new {
+        *guard = Some(key.clone()); // store a clone
+        let _ = window.emit("gsmtc_track_changed", &payload);
+    }
+
+    println!("[DEBUG GSMTC] {payload}");
+    Ok(payload)
+}
 
 #[tauri::command]
 async fn connect_spotify(
