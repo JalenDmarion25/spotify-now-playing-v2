@@ -4475,7 +4475,9 @@ dependencies = [
 name = "spotify-now-playing"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "dotenvy",
+ "futures",
  "image",
  "lofty",
  "once_cell",

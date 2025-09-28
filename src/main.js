@@ -39,14 +39,15 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (key && key !== lastGSMTCKey) {
         lastGSMTCKey = key;
         console.log(
-          `[GSMTC] Now playing: Song: ${d?.title || "?"} — Artist: ${d?.artist || "?"}${
-            d?.album ? ` — Album: ${d.album}` : ""
-          }`
+          `[GSMTC] Now playing: Song: ${d?.title || "?"} — Artist: ${
+            d?.artist || "?"
+          }${d?.album ? ` — Album: ${d.album}` : ""}`
         );
       }
+      // NEW: render every poll (cheap)
+      renderNowPlayingGSMTC(d);
     } catch (e) {
-      // Optional: quiet errors (e.g., no active session)
-      // console.debug("[GSMTC] poll error:", e);
+      // optional: quiet
     }
   }
 
@@ -219,6 +220,44 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (type) statusEl.classList.add(type);
   }
 
+  function renderNowPlayingGSMTC(d) {
+    if (!d) return;
+
+    const np = document.getElementById("now-playing");
+    const art = document.getElementById("artwork");
+    if (!np || !art) return;
+
+    // default/reset
+    art.style.display = "none";
+    art.removeAttribute("src");
+    np.textContent = "";
+
+    const status = (d?.status || "").toLowerCase();
+    const active =
+      ["playing", "paused"].includes(status) || d?.position_ms != null;
+
+    if (!active) {
+      np.textContent = "Nothing is currently playing.";
+      return;
+    }
+
+    const title = (d?.title || "").trim();
+    const artist = (d?.artist || "").trim();
+    const album = (d?.album || "").trim();
+
+    if (title || artist || album) {
+      np.textContent = `▶ ${title}${artist ? " — " + artist : ""}${
+        album ? " — " + album : ""
+      }`;
+    }
+
+    // Prefer the thumbnail the Rust side saves as a local file
+    if (d?.artwork_path) {
+      art.src = convertFileSrc(d.artwork_path);
+      art.style.display = "block";
+    }
+  }
+
   function renderNowPlaying(d) {
     if (!artworkEl) return;
 
@@ -252,11 +291,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // events
-  await listen("now_playing_update", async (evt) => {
-    const d = evt.payload;
-    renderNowPlaying(d);
-    await maybeExport(d); // <-- auto export on every change while checked
-  });
+  // await listen("now_playing_update", async (evt) => {
+  //   const d = evt.payload;
+  //   renderNowPlaying(d);
+  //   await maybeExport(d); // <-- auto export on every change while checked
+  // });
   await listen("auth_lost", async () => {
     try {
       const ok = await invoke("restore_spotify");
