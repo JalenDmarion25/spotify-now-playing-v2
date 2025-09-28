@@ -9,6 +9,14 @@
   </head>
 
   <main class="container">
+    <div class="row">
+      <label for="source-mode">Now Playing Source:</label>
+      <select id="source-mode">
+        <option value="gsmtc">Windows GSMTC (Recommended)</option>
+        <option value="spotify">Spotify API</option>
+      </select>
+    </div>
+
     <p>Click to Connect</p>
 
     <form class="row" id="connect-form">
@@ -20,7 +28,9 @@
     </div>
 
     <div class="row">
-      <button id="choose-folder" type="button">Local File Directory (Optional)</button>
+      <button id="choose-folder" type="button">
+        Local File Directory (Optional)
+      </button>
     </div>
 
     <div class="row">
@@ -43,10 +53,5 @@
     <p id="status"></p>
     <p id="local-dir"></p>
 
-          <!-- NEW: Now playing row -->
-      <div class="row" style="display:flex;gap:.75rem;align-items:center">
-        <img id="artwork" alt="Album art" style="display:none;width:64px;height:64px;border-radius:6px;object-fit:cover" />
-        <div id="now-playing" style="min-height:1.25rem;"></div>
-      </div>
   </main>
 </html>

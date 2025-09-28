@@ -10,6 +10,85 @@ let lastKey = "";
 
 // --- THEME (local preview only; actual source of truth is main window) ---
 const THEME_KEYS = { bg: "theme:bg", title: "theme:title", meta: "theme:meta" };
+const SOURCE_KEY = "source:mode";
+let sourceMode = "spotify"; // default
+let gsmPollId = null;
+
+function setSourceMode(next) {
+  sourceMode = next === "gsmtc" ? "gsmtc" : "spotify";
+  localStorage.setItem(SOURCE_KEY, sourceMode);
+  restartStrategy();
+}
+
+function stopGSMTCPoll() {
+  if (gsmPollId) {
+    clearInterval(gsmPollId);
+    gsmPollId = null;
+  }
+}
+
+function startGSMTCPoll() {
+  stopGSMTCPoll();
+  const poll = async () => {
+    try {
+      const d = await window.__TAURI__.core.invoke("get_current_playing_gsmtc");
+      renderGSMTC(d); // convert + render
+    } catch (e) {
+      console.warn(e);
+    }
+  };
+  poll();
+  gsmPollId = setInterval(poll, 2000);
+}
+
+let spotifyUnsub = null;
+async function startSpotifyListener() {
+  stopSpotifyListener();
+  spotifyUnsub = await window.__TAURI__.event.listen(
+    "now_playing_update",
+    (evt) => {
+      render(evt.payload);
+    }
+  );
+}
+function stopSpotifyListener() {
+  if (typeof spotifyUnsub === "function") {
+    spotifyUnsub();
+    spotifyUnsub = null;
+  }
+}
+
+function restartStrategy() {
+  if (sourceMode === "gsmtc") {
+    stopSpotifyListener();
+    startGSMTCPoll();
+  } else {
+    stopGSMTCPoll();
+    startSpotifyListener();
+  }
+}
+
+function renderGSMTC(d) {
+  const status = (d?.status || "").toLowerCase();
+  const active = ["playing", "paused"].includes(status) || d?.position_ms != null;
+
+  if (!active) {
+    render({ is_playing: false });
+    return;
+  }
+  const track_name = (d?.title || "").trim();
+  const artists    = (d?.artist || "").trim(); // widget expects string ok
+  const album      = (d?.album || "").trim();
+
+  render({
+    is_playing: true,
+    track_name,
+    artists,
+    album,
+    artwork_url: null,
+    artwork_path: d?.artwork_path || null,
+  });
+}
 
 function getTheme() {
   return {
@@ -177,7 +256,7 @@ function render(d) {
 
   slidePanel(true);
   const title = d.track_name;
-  const meta = d.artists;
+  const meta = typeof d.artists === "string" ? d.artists : (d.artists || []).join(", ");
   const art = resolveArtUrl(d);
   const key = `${title}|${meta}|${art}`;
 
@@ -201,27 +280,46 @@ function render(d) {
   }
 }
 
+
 window.addEventListener("DOMContentLoaded", async () => {
   const tauri = window.__TAURI__;
   if (!tauri) return console.error("[widget] __TAURI__ not found");
 
   const { event, core } = tauri;
 
-  // Theme: receive updates & request the current theme when we open
+  // Theme channel (unchanged)
   await event.listen("theme_update", (evt) => applyTheme(evt.payload));
   await event.emit("request_theme");
 
-  // Now playing updates
-  await event.listen("now_playing_update", (evt) => {
-    console.log("[widget] update", evt.payload);
-    render(evt.payload);
+  // Source mode channel: keep in sync with main window
+  await event.listen("source_mode_update", (evt) => {
+    const mode = evt?.payload?.mode;
+    if (mode) setSourceMode(mode);
   });
 
-  // Seed once
+  // Ask main window what to use
+  await event.emit("request_source_mode");
+
+  // Fallback if we didn’t hear back quickly (rare):
+  setTimeout(() => {
+    if (!sourceMode) setSourceMode(localStorage.getItem(SOURCE_KEY) || "spotify");
+  }, 500);
+
+  // Seed a first frame for whichever source we end up on
+  // We don’t know the mode yet, but we can attempt both safely:
   try {
+    // Spotify seed (may fail if not connected)
     const d = await core.invoke("get_current_playing");
-    render(d);
-  } catch (e) {
-    console.error("[widget] seed failed", e);
-  }
+    if (d?.track_name || d?.is_playing) render(d);
+  } catch {}
+
+  try {
+    // GSMTC seed (cheap, doesn’t interfere)
+    const g = await core.invoke("get_current_playing_gsmtc");
+    renderGSMTC(g);
+  } catch {}
+
+  // Start the strategy (it will be replaced once source_mode_update arrives)
+  restartStrategy();
 });
+

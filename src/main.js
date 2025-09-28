@@ -10,6 +10,31 @@ document.addEventListener("DOMContentLoaded", async () => {
   const artworkEl = document.getElementById("artwork"); // may be null
   const exportToggle = document.getElementById("export-toggle");
   const out = await window.__TAURI__.core.invoke("get_current_playing_gsmtc");
+  const sourceSelect = document.getElementById("source-mode");
+  const SOURCE_KEY = "source:mode"; // "spotify" | "gsmtc"
+
+  function getSourceMode() {
+    return localStorage.getItem(SOURCE_KEY) || "spotify";
+  }
+  function setSourceMode(mode) {
+    localStorage.setItem(SOURCE_KEY, mode);
+  }
+  async function broadcastSourceMode(mode = getSourceMode()) {
+    try {
+      await window.__TAURI__.event.emit("source_mode_update", { mode });
+    } catch {}
+  }
+
+  if (sourceSelect) {
+    // init select from saved pref
+    sourceSelect.value = getSourceMode();
+
+    sourceSelect.addEventListener("change", async (e) => {
+      const next = e.target.value === "gsmtc" ? "gsmtc" : "spotify";
+      setSourceMode(next);
+      await broadcastSourceMode(next);
+    });
+  }
   console.log("[GSMTC View]", out);
 
   // --- Poll GSMTC and log when the track changes ---
@@ -107,6 +132,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   const bootTheme = getTheme();
   applyThemeToMain(bootTheme);
   broadcastTheme(bootTheme);
+
+  // Broadcast current source once on boot (widget will pick it up)
+  broadcastSourceMode(getSourceMode());
+
+  // Respond when a window asks for the current source
+  await listen("request_source_mode", async () => {
+    await broadcastSourceMode(getSourceMode());
+  });
 
   // Respond when someone asks for the current theme (widget/settings)
   await listen("request_theme", async () => {

@@ -39,7 +39,8 @@ img {
 }
 
 input,
-button {
+button,
+select {
   border-radius: 8px;
   border: 1px solid transparent;
   padding: 0.6em 1.2em;
@@ -51,8 +52,8 @@ button {
   background-color: #ffffff;
   transition: border-color 0.25s;
   box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
+  outline: none;
 }
-
 button {
   cursor: pointer;
 }
@@ -68,6 +69,28 @@ button:active {
 input,
 button {
   outline: none;
+}
+
+select {
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 2.2em;
+  /* custom chevron that inherits current text color */
+  background-image: url("data:image/svg+xml,%3Csvg width='12' height='8' viewBox='0 0 12 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l5 5 5-5' stroke='currentColor' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.8em center;
+  background-size: 12px 8px;
+}
+
+/* hover/active to match buttons */
+select:hover {
+  border-color: #04ad4b;
+}
+select:active {
+  border-color: #04ad4b;
+  background-color: #e8e8e8;
 }
 
 #greet-input {
@@ -92,11 +115,13 @@ button {
     background-color: #2f2f2f;
   }
   input,
-  button {
+  button,
+  select {
     color: #ffffff;
     background-color: #0f0f0f98;
   }
-  button:active {
+  button:active,
+  select:active {
     background-color: #0f0f0f69;
   }
 }
