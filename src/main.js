@@ -17,6 +17,83 @@ document.addEventListener("DOMContentLoaded", async () => {
   const gsmtcAppFilter = document.getElementById("gsmtc-app-filter");
   const SOURCE_KEY = "source:mode"; // "spotify" | "gsmtc"
   const GSMTC_APP_KEY = "gsmtc:app"; // "spotify" | "apple" | "ytm"
+  const dd = document.getElementById("gsmtc-dd");
+  const btn = dd.querySelector("#gsmtc-dd-btn");
+  const label = dd.querySelector("#gsmtc-dd-label");
+  const menu = dd.querySelector(".dd-menu");
+  const opts = Array.from(menu.querySelectorAll('[role="option"]'));
+
+  // init from storage (default spotify)
+  const stored = localStorage.getItem(GSMTC_APP_KEY) || "spotify";
+  dd.dataset.value = stored;
+  label.textContent =
+    { spotify: "Spotify", apple: "Apple Music", ytm: "YouTube Music" }[
+      stored
+    ] || "Spotify";
+  opts.forEach((o) =>
+    o.setAttribute("aria-selected", String(o.dataset.value === stored))
+  );
+
+  // open/close
+  function open() {
+    dd.classList.add("open");
+    btn.setAttribute("aria-expanded", "true");
+  }
+  function close() {
+    dd.classList.remove("open");
+    btn.setAttribute("aria-expanded", "false");
+  }
+  function toggle() {
+    dd.classList.contains("open") ? close() : open();
+  }
+
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggle();
+  });
+
+  // choose an option
+  async function choose(value, text) {
+    dd.dataset.value = value;
+    label.textContent = text;
+    opts.forEach((o) =>
+      o.setAttribute("aria-selected", String(o.dataset.value === value))
+    );
+    localStorage.setItem(GSMTC_APP_KEY, value);
+
+    // tell the widget about the new filter
+    try {
+      await window.__TAURI__.event.emit("gsmtc_app_filter_update", { value });
+    } catch {}
+    close();
+  }
+
+  opts.forEach((o) => {
+    o.addEventListener("click", (e) => {
+      e.stopPropagation();
+      choose(o.dataset.value, o.textContent.trim());
+    });
+    o.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        choose(o.dataset.value, o.textContent.trim());
+      }
+      if (e.key === "Escape") close();
+    });
+  });
+
+  // close on outside click / Esc
+  document.addEventListener("click", (e) => {
+    if (!dd.contains(e.target)) close();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") close();
+  });
+
+  // ensure dropdown remains clickable (your app uses global drag region)
+  dd.style.webkitAppRegion = "no-drag";
+  btn.style.webkitAppRegion = "no-drag";
+  menu.style.webkitAppRegion = "no-drag";
 
   function getSourceMode() {
     return localStorage.getItem(SOURCE_KEY) || "spotify";
