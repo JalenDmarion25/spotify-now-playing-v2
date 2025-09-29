@@ -12,7 +12,7 @@
       {
         "title": "Now Playing",
         "width": 350,
-        "height": 560,
+        "height": 600,
         "resizable": false,
         "maximizable": false
       }
