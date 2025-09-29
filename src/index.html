@@ -9,9 +9,67 @@
   </head>
 
   <main class="container">
-    <p>Click to Connect</p>
+    <div class="row">
+      <label for="source-mode">Now Playing Source:</label>
+      <select id="source-mode">
+        <option value="gsmtc">Windows GSMTC (Recommended)</option>
+        <option value="spotify">Spotify API</option>
+      </select>
+    </div>
+
+    <div id="gsmtc-filter-row" class="row">
+      <label for="gsmtc-dd-btn">Music Application:</label>
+
+      <!-- Custom dropdown -->
+      <div class="dd" id="gsmtc-dd" data-value="spotify">
+        <button
+          id="gsmtc-dd-btn"
+          class="dd-toggle"
+          type="button"
+          aria-haspopup="listbox"
+          aria-expanded="false"
+        >
+          <span class="dd-label" id="gsmtc-dd-label">Spotify</span>
+          <svg width="12" height="8" viewBox="0 0 12 8" aria-hidden="true">
+            <path
+              d="M1 1l5 5 5-5"
+              stroke="currentColor"
+              stroke-width="2"
+              fill="none"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
+
+        <div class="dd-menu" role="listbox" aria-labelledby="gsmtc-dd-btn">
+          <span
+            role="option"
+            data-value="spotify"
+            aria-selected="true"
+            tabindex="0"
+            >Spotify</span
+          >
+          <span
+            role="option"
+            data-value="apple"
+            aria-selected="false"
+            tabindex="0"
+            >Apple Music</span
+          >
+          <span
+            role="option"
+            data-value="ytm"
+            aria-selected="false"
+            tabindex="0"
+            >YouTube Music</span
+          >
+        </div>
+      </div>
+    </div>
 
     <form class="row" id="connect-form">
+      <p>Click to Connect</p>
       <button type="submit">Connect</button>
     </form>
 
@@ -20,7 +78,9 @@
     </div>
 
     <div class="row">
-      <button id="choose-folder" type="button">Local File Directory (Optional)</button>
+      <button id="choose-folder" type="button">
+        Local File Directory (Optional)
+      </button>
     </div>
 
     <div class="row">
@@ -36,7 +96,7 @@
         "
       >
         <input id="export-toggle" type="checkbox" />
-        Export Track
+        Export Track (API Only)
       </label>
     </div>
 

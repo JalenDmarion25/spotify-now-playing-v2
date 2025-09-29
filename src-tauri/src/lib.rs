@@ -1,7 +1,8 @@
 use lofty::picture::{Picture, PictureType};
 use lofty::prelude::{Accessor, TaggedFileExt};
 use lofty::probe::Probe;
-use parking_lot::Mutex;
+use parking_lot::lock_api::Mutex;
+use parking_lot::Mutex as PlMutex;
 use rspotify::{
     clients::{BaseClient, OAuthClient},
     model::{Image, PlayableItem},
@@ -33,7 +34,7 @@ struct SpotifyStore {
     local_index: HashMap<String, PathBuf>,
 }
 
-type SharedStore = Arc<Mutex<SpotifyStore>>;
+type SharedStore = Arc<PlMutex<SpotifyStore>>;
 
 #[derive(Serialize)]
 struct NowPlaying {
@@ -554,6 +555,182 @@ async fn restore_spotify(
     Ok(false)
 }
 
+
+#[tauri::command]
+async fn get_current_playing_gsmtc(
+    window: tauri::Window,
+) -> Result<serde_json::Value, String> {
+    use futures::executor::block_on;
+
+    let app_handle = window.app_handle().clone();
+    let win_for_emit = window.clone();
+
+    let res: Result<(serde_json::Value, Option<String>), String> =
+        tauri::async_runtime::spawn_blocking(move || {
+            let result = block_on(async move {
+                use windows::Media::Control::{
+                    GlobalSystemMediaTransportControlsSession,
+                    GlobalSystemMediaTransportControlsSessionManager
+                };
+                use windows::Storage::Streams::{DataReader, InputStreamOptions};
+
+                let mgr = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
+                    .map_err(|e| format!("RequestAsync failed: {:?}", e))?
+                    .await
+                    .map_err(|e| format!("Await manager failed: {:?}", e))?;
+
+                let session: Option<GlobalSystemMediaTransportControlsSession> =
+                    match mgr.GetSessions() {
+                        Ok(list) => {
+                            let n = list.Size().unwrap_or(0);
+                            let mut picked = None;
+                            for i in 0..n {
+                                if let Ok(s) = list.GetAt(i) {
+                                    if let Ok(aumid) = s.SourceAppUserModelId() {
+                                        if aumid.to_string().to_ascii_lowercase().contains("spotify") {
+                                            picked = Some(s);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            picked.or_else(|| mgr.GetCurrentSession().ok())
+                        }
+                        Err(_) => mgr.GetCurrentSession().ok(),
+                    };
+
+                let Some(session) = session else {
+                    return Ok::<(serde_json::Value, Option<String>), String>((
+                        serde_json::json!({"error": "No active session"}),
+                        None,
+                    ));
+                };
+
+                let status = session
+                    .GetPlaybackInfo()
+                    .ok()
+                    .and_then(|info| info.PlaybackStatus().ok())
+                    .map(|s| format!("{:?}", s))
+                    .unwrap_or_else(|| "Unknown".to_string());
+
+                let props = session
+                    .TryGetMediaPropertiesAsync()
+                    .map_err(|e| format!("TryGetMediaPropertiesAsync: {:?}", e))?
+                    .await
+                    .map_err(|e| format!("await media properties: {:?}", e))?;
+
+                let title  = props.Title().unwrap_or_default().to_string();
+                let album  = props.AlbumTitle().unwrap_or_default().to_string();
+                let artist = props.Artist().unwrap_or_default().to_string();
+
+                // Thumbnail → bytes → cache file
+                let mut artwork_path: Option<String> = None;
+                if let Ok(th) = props.Thumbnail() {
+                    if let Ok(op) = th.OpenReadAsync() {
+                        if let Ok(stream) = op.await {
+                            let input = stream
+                                .GetInputStreamAt(0)
+                                .map_err(|e| format!("GetInputStreamAt: {:?}", e))?;
+                            let size = (stream.Size().unwrap_or(0).min(u64::from(u32::MAX))) as u32;
+                            if size > 0 {
+                                let reader = DataReader::CreateDataReader(&input)
+                                    .map_err(|e| format!("CreateDataReader: {:?}", e))?;
+                                reader
+                                    .SetInputStreamOptions(InputStreamOptions::ReadAhead)
+                                    .map_err(|e| format!("SetInputStreamOptions: {:?}", e))?;
+                                reader
+                                    .LoadAsync(size)
+                                    .map_err(|e| format!("LoadAsync: {:?}", e))?
+                                    .await
+                                    .map_err(|e| format!("LoadAsync await: {:?}", e))?;
+
+                                let mut bytes = vec![0u8; size as usize];
+                                reader.ReadBytes(bytes.as_mut_slice())
+                                    .map_err(|e| format!("ReadBytes: {:?}", e))?;
+
+                                // Use the cloned app handle (not `window`) here.
+                                let cache_dir = app_handle
+                                    .path()
+                                    .app_local_data_dir()
+                                    .map_err(|e| format!("app_local_data_dir: {e}"))?
+                                    .join("artcache");
+                                let _ = std::fs::create_dir_all(&cache_dir);
+
+                                let safe = |s: &str| s.chars()
+                                    .map(|c| if r#"\/:*?"<>|"#.contains(c) { '_' } else { c })
+                                    .collect::<String>();
+
+                                let png_path = cache_dir.join(format!(
+                                    "{}_{}_{}.png", safe(&artist), safe(&album), safe(&title)
+                                ));
+
+                                if let Ok(img) = image::load_from_memory(&bytes) {
+                                    img.save(&png_path).map_err(|e| format!("save png: {e}"))?;
+                                    artwork_path = Some(png_path.to_string_lossy().to_string());
+                                } else {
+                                    let raw_path = cache_dir.join(format!(
+                                        "{}_{}_{}.bin", safe(&artist), safe(&album), safe(&title)
+                                    ));
+                                    std::fs::write(&raw_path, &bytes)
+                                        .map_err(|e| format!("write thumb: {e}"))?;
+                                    artwork_path = Some(raw_path.to_string_lossy().to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let (position_ms, end_time_ms, last_updated_iso) =
+                    match session.GetTimelineProperties() {
+                        Ok(tl) => {
+                            let pos_ms = tl.Position().ok().map(|ts| ts.Duration / 10_000);
+                            let end_ms = tl.EndTime().ok().map(|ts| ts.Duration / 10_000);
+                            let last_updated =
+                                tl.LastUpdatedTime().ok().map(|dt| format!("{:?}", dt));
+                            (pos_ms, end_ms, last_updated)
+                        }
+                        Err(_) => (None, None, None),
+                    };
+
+                let payload = serde_json::json!({
+                    "status": status,
+                    "title": title,
+                    "album": album,
+                    "artist": artist,
+                    "position_ms": position_ms,
+                    "end_time_ms": end_time_ms,
+                    "last_updated": last_updated_iso,
+                    "source_app_id": session.SourceAppUserModelId().ok().map(|s| s.to_string()),
+                    "artwork_path": artwork_path
+                });
+
+                Ok::<(serde_json::Value, Option<String>), String>(
+                    (payload, Some(format!("{title}|{artist}|{album}")))
+                )
+            });
+
+            result
+        })
+        .await
+        .map_err(|e| format!("spawn_blocking join error: {e}"))?;
+
+    // Emit from the cloned window AFTER the await
+    if let Ok((payload, Some(key))) = &res {
+        use std::sync::{Mutex as StdMutex, OnceLock};
+        static LAST_GSMTC_TRACK: OnceLock<StdMutex<Option<String>>> = OnceLock::new();
+        let cell = LAST_GSMTC_TRACK.get_or_init(|| StdMutex::new(None));
+        let mut guard = cell.lock().unwrap();
+        if guard.as_deref() != Some(key) {
+            *guard = Some(key.clone());
+            let _ = win_for_emit.emit("gsmtc_track_changed", payload);
+        }
+    }
+
+    res.map(|(payload, _)| payload)
+}
+
+
+
 #[tauri::command]
 async fn connect_spotify(
     state: State<'_, SharedStore>,
@@ -1026,6 +1203,7 @@ pub fn run() {
             set_local_art_dir,
             get_local_art_dir,
             write_now_playing_assets,
+            get_current_playing_gsmtc,
         ])
         .on_window_event(|window, event| {
             use tauri::WindowEvent;

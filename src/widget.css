@@ -1,29 +1,26 @@
 html,
 body {
-    margin: 0;
-    font: 14px system-ui;
-    user-select: none;
-    -webkit-app-region: drag;
-    width: 100%;
-    height: 100%;
-    background-color: #2f2f2f;
-
+  margin: 0;
+  font: 14px system-ui;
+  user-select: none;
+  -webkit-app-region: drag;
+  width: 100%;
+  height: 100%;
+  background-color: #2f2f2f;
 }
 
-
 .widget {
-  width: 350px;          /* set to your widget width */
-  height: 70px;          /* adjust if needed */
+  width: 350px; /* set to your widget width */
+  height: 70px; /* adjust if needed */
   overflow: hidden;
   transform: translateX(-500px); /* hidden off-screen (left) */
   transition: transform 500ms ease;
 }
 
-
 .widget.show {
-    transform: translateX(0);
-    width: 100%;
-    height: 100%;
+  transform: translateX(0);
+  width: 100%;
+  height: 100%;
 }
 /* Looping marquee (infinite) for long lines */
 .looping {
@@ -33,26 +30,30 @@ body {
 
 /* Start slightly right (like 290px in the old code), end fully past left */
 @keyframes loop-marquee {
-  from { transform: translateX(var(--loop-start, 290px)); }
-  to   { transform: translateX(calc(-1 * (var(--loop-end, 0px)))); }
+  from {
+    transform: translateX(var(--loop-start, 290px));
+  }
+  to {
+    transform: translateX(calc(-1 * (var(--loop-end, 0px))));
+  }
 }
 
 .np {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 #artwork {
-    width: 80px;
-    height: 80px;
-    object-fit: cover;
-    user-select: none;
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity 660ms ease;
+  width: 80px;
+  height: 80px;
+  object-fit: cover;
+  user-select: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 660ms ease;
 }
 
 #artwork.show {
@@ -67,16 +68,18 @@ body {
 }
 
 /* hidden baseline */
-#title, #meta {
+#title,
+#meta {
   width: 100%;
   position: relative;
   overflow: hidden;
   white-space: nowrap;
 }
 
-#title span, #meta span {
+#title span,
+#meta span {
   display: inline-block;
-  padding-right: 2rem;      /* little gap before it loops */
+  padding-right: 2rem; /* little gap before it loops */
   will-change: transform;
 }
 
@@ -98,10 +101,97 @@ body {
   text-overflow: ellipsis;
 }
 
-#title, #meta { text-overflow: clip; }
+#title,
+#meta {
+  text-overflow: clip;
+}
 
+/* Custom dropdown */
+.dd {
+  position: relative;
+  display: inline-block;
+  min-width: 220px;
+}
+.dd,
+.dd * {
+  -webkit-app-region: no-drag;
+}
+
+.dd-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0.6em 1.2em;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  background: #fff;
+  color: #0f0f0f;
+  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
+  text-align: center;
+}
+.dd-toggle:hover {
+  border-color: #04ad4b;
+}
+.dd-toggle:active {
+  background: #e8e8e8;
+  border-color: #04ad4b;
+}
+
+.dd-toggle svg {
+  margin-left: 0.25rem;
+}
+
+.dd-menu {
+  width: fit-content; 
+  z-index: 1000; 
+}
+
+.dd.open .dd-menu {
+  display: block;
+}
+
+.dd-menu [role="option"] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.6em 1.2em;
+  cursor: pointer;
+}
+.dd-menu [role="option"]:hover {
+  background: #f2f2f2;
+}
+.dd-menu [role="option"][aria-selected="true"] {
+  background: #eafaf0;
+}
+
+#gsmtc-filter-row {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+}
 
 @media (prefers-color-scheme: dark) {
+  .dd-toggle {
+    background: #0f0f0f98;
+    color: #fff;
+  }
+  .dd-menu {
+    background: #131313;
+    color: #fff;
+  }
+  .dd-menu [role="option"]:hover {
+    background: #1e1e1e;
+  }
+  .dd-menu [role="option"][aria-selected="true"] {
+    background: #102d1d;
+  }
+
   :root {
     color: transparent;
   }

@@ -9,6 +9,174 @@ document.addEventListener("DOMContentLoaded", async () => {
   const nowPlayingEl = document.getElementById("now-playing"); // may be null
   const artworkEl = document.getElementById("artwork"); // may be null
   const exportToggle = document.getElementById("export-toggle");
+  const out = await window.__TAURI__.core.invoke("get_current_playing_gsmtc");
+  const sourceSelect = document.getElementById("source-mode");
+  const connectForm = document.getElementById("connect-form");
+  const chooseBtn = document.getElementById("choose-folder");
+  const gsmtcFilterRow = document.getElementById("gsmtc-filter-row");
+  const gsmtcAppFilter = document.getElementById("gsmtc-app-filter");
+  const SOURCE_KEY = "source:mode"; // "spotify" | "gsmtc"
+  const GSMTC_APP_KEY = "gsmtc:app"; // "spotify" | "apple" | "ytm"
+  const dd = document.getElementById("gsmtc-dd");
+  const btn = dd.querySelector("#gsmtc-dd-btn");
+  const label = dd.querySelector("#gsmtc-dd-label");
+  const menu = dd.querySelector(".dd-menu");
+  const opts = Array.from(menu.querySelectorAll('[role="option"]'));
+
+  // init from storage (default spotify)
+  const stored = localStorage.getItem(GSMTC_APP_KEY) || "spotify";
+  dd.dataset.value = stored;
+  label.textContent =
+    { spotify: "Spotify", apple: "Apple Music", ytm: "YouTube Music" }[
+      stored
+    ] || "Spotify";
+  opts.forEach((o) =>
+    o.setAttribute("aria-selected", String(o.dataset.value === stored))
+  );
+
+  // open/close
+  function open() {
+    dd.classList.add("open");
+    btn.setAttribute("aria-expanded", "true");
+  }
+  function close() {
+    dd.classList.remove("open");
+    btn.setAttribute("aria-expanded", "false");
+  }
+  function toggle() {
+    dd.classList.contains("open") ? close() : open();
+  }
+
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggle();
+  });
+
+  // choose an option
+  async function choose(value, text) {
+    dd.dataset.value = value;
+    label.textContent = text;
+    opts.forEach((o) =>
+      o.setAttribute("aria-selected", String(o.dataset.value === value))
+    );
+    localStorage.setItem(GSMTC_APP_KEY, value);
+
+    // tell the widget about the new filter
+    try {
+      await window.__TAURI__.event.emit("gsmtc_app_filter_update", { value });
+    } catch {}
+    close();
+  }
+
+  opts.forEach((o) => {
+    o.addEventListener("click", (e) => {
+      e.stopPropagation();
+      choose(o.dataset.value, o.textContent.trim());
+    });
+    o.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        choose(o.dataset.value, o.textContent.trim());
+      }
+      if (e.key === "Escape") close();
+    });
+  });
+
+  // close on outside click / Esc
+  document.addEventListener("click", (e) => {
+    if (!dd.contains(e.target)) close();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") close();
+  });
+
+  // ensure dropdown remains clickable (your app uses global drag region)
+  dd.style.webkitAppRegion = "no-drag";
+  btn.style.webkitAppRegion = "no-drag";
+  menu.style.webkitAppRegion = "no-drag";
+
+  function getSourceMode() {
+    return localStorage.getItem(SOURCE_KEY) || "spotify";
+  }
+  function setSourceMode(mode) {
+    localStorage.setItem(SOURCE_KEY, mode);
+  }
+  async function broadcastSourceMode(mode = getSourceMode()) {
+    try {
+      await window.__TAURI__.event.emit("source_mode_update", { mode });
+    } catch {}
+  }
+
+  if (sourceSelect) {
+    // init select from saved pref
+    const initialMode = getSourceMode();
+    sourceSelect.value = initialMode;
+    applySourceVisibility(initialMode);
+
+    if (gsmtcAppFilter) {
+      gsmtcAppFilter.addEventListener("change", async (e) => {
+        const v = e.target.value || "spotify";
+        localStorage.setItem(GSMTC_APP_KEY, v);
+        await broadcastGSMTCAppFilter(v);
+      });
+    }
+
+    sourceSelect.addEventListener("change", async (e) => {
+      const next = e.target.value === "gsmtc" ? "gsmtc" : "spotify";
+      setSourceMode(next);
+      applySourceVisibility(next); // ← apply on change
+      await broadcastSourceMode(next);
+      await broadcastGSMTCAppFilter(getGSMTCAppFilter());
+    });
+  }
+  console.log("[GSMTC View]", out);
+
+  // --- Poll GSMTC and log when the track changes ---
+  let lastGSMTCKey = "";
+
+  function gsmKey(d) {
+    // Only log if we actually have a "playing" track
+    const isPlaying =
+      (d?.status || "").toLowerCase() === "playing" ||
+      (d?.status || "").toLowerCase() === "paused" || // include paused so seek/next still logs
+      d?.position_ms != null;
+
+    if (!isPlaying) return null;
+
+    const title = (d?.title || "").trim();
+    const artist = (d?.artist || "").trim();
+    const album = (d?.album || "").trim();
+    if (!title && !artist && !album) return null;
+
+    return [title, artist, album].join("||").toLowerCase();
+  }
+
+  async function pollGSMTC() {
+    try {
+      const d = await window.__TAURI__.core.invoke("get_current_playing_gsmtc");
+      const key = gsmKey(d);
+      if (key && key !== lastGSMTCKey) {
+        lastGSMTCKey = key;
+        console.log(
+          `[GSMTC] Now playing: Song: ${d?.title || "?"} — Artist: ${
+            d?.artist || "?"
+          }${d?.album ? ` — Album: ${d.album}` : ""}`
+        );
+      }
+      // NEW: render every poll (cheap)
+      renderNowPlayingGSMTC(d);
+    } catch (e) {
+      // optional: quiet
+    }
+  }
+
+  // kick off immediately, then poll every 2s
+  pollGSMTC();
+  const gsmPoll = setInterval(pollGSMTC, 2000);
+
+  // (optional) stop polling when page unloads
+  window.addEventListener("beforeunload", () => clearInterval(gsmPoll));
+
   const THEME_KEYS = {
     bg: "theme:bg",
     title: "theme:title",
@@ -28,6 +196,25 @@ document.addEventListener("DOMContentLoaded", async () => {
       ? `Local folder set: ${dir}`
       : "Art folder: (none set)";
   };
+
+  function applySourceVisibility(mode) {
+    const isGsmtc = mode === "gsmtc";
+    if (connectForm) connectForm.style.display = isGsmtc ? "none" : "";
+    if (chooseBtn) chooseBtn.style.display = isGsmtc ? "none" : "";
+    if (statusEl) statusEl.style.display = isGsmtc ? "none" : "";
+    if (localDirEl) localDirEl.style.display = isGsmtc ? "none" : "";
+    if (gsmtcFilterRow) gsmtcFilterRow.style.display = isGsmtc ? "" : "none";
+  }
+
+  function getGSMTCAppFilter() {
+    return localStorage.getItem(GSMTC_APP_KEY) || "spotify";
+  }
+
+  async function broadcastGSMTCAppFilter(value = getGSMTCAppFilter()) {
+    try {
+      await window.__TAURI__.event.emit("gsmtc_app_filter_update", { value });
+    } catch {}
+  }
 
   function getTheme() {
     return {
@@ -58,6 +245,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   const bootTheme = getTheme();
   applyThemeToMain(bootTheme);
   broadcastTheme(bootTheme);
+
+  // Broadcast current source once on boot (widget will pick it up)
+  broadcastSourceMode(getSourceMode());
+  broadcastGSMTCAppFilter(getGSMTCAppFilter());
+
+  // Respond when a window asks for the current source
+  await listen("request_gsmtc_app_filter", async () => {
+    await broadcastGSMTCAppFilter(getGSMTCAppFilter());
+  });
 
   // Respond when someone asks for the current theme (widget/settings)
   await listen("request_theme", async () => {
@@ -171,6 +367,44 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (type) statusEl.classList.add(type);
   }
 
+  function renderNowPlayingGSMTC(d) {
+    if (!d) return;
+
+    const np = document.getElementById("now-playing");
+    const art = document.getElementById("artwork");
+    if (!np || !art) return;
+
+    // default/reset
+    art.style.display = "none";
+    art.removeAttribute("src");
+    np.textContent = "";
+
+    const status = (d?.status || "").toLowerCase();
+    const active =
+      ["playing", "paused"].includes(status) || d?.position_ms != null;
+
+    if (!active) {
+      np.textContent = "Nothing is currently playing.";
+      return;
+    }
+
+    const title = (d?.title || "").trim();
+    const artist = (d?.artist || "").trim();
+    const album = (d?.album || "").trim();
+
+    if (title || artist || album) {
+      np.textContent = `▶ ${title}${artist ? " — " + artist : ""}${
+        album ? " — " + album : ""
+      }`;
+    }
+
+    // Prefer the thumbnail the Rust side saves as a local file
+    if (d?.artwork_path) {
+      art.src = convertFileSrc(d.artwork_path);
+      art.style.display = "block";
+    }
+  }
+
   function renderNowPlaying(d) {
     if (!artworkEl) return;
 
@@ -204,11 +438,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // events
-  await listen("now_playing_update", async (evt) => {
-    const d = evt.payload;
-    renderNowPlaying(d);
-    await maybeExport(d); // <-- auto export on every change while checked
-  });
+  // await listen("now_playing_update", async (evt) => {
+  //   const d = evt.payload;
+  //   renderNowPlaying(d);
+  //   await maybeExport(d); // <-- auto export on every change while checked
+  // });
   await listen("auth_lost", async () => {
     try {
       const ok = await invoke("restore_spotify");
@@ -224,7 +458,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // choose local folder (requires tauri-plugin-dialog on the Rust side)
-  const chooseBtn = document.getElementById("choose-folder");
   if (chooseBtn) {
     chooseBtn.addEventListener("click", async () => {
       const dir = await open({ directory: true, multiple: false });

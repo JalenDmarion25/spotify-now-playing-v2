@@ -10,6 +10,146 @@ let lastKey = "";
 
 // --- THEME (local preview only; actual source of truth is main window) ---
 const THEME_KEYS = { bg: "theme:bg", title: "theme:title", meta: "theme:meta" };
+const SOURCE_KEY = "source:mode";
+const GSMTC_APP_KEY = "gsmtc:app"; // "spotify" | "apple" | "ytm"
+let gsmtcAppFilter = localStorage.getItem(GSMTC_APP_KEY) || "spotify";
+let sourceMode = "spotify"; // default
+let gsmPollId = null;
+
+function setSourceMode(next) {
+  sourceMode = next === "gsmtc" ? "gsmtc" : "spotify";
+  localStorage.setItem(SOURCE_KEY, sourceMode);
+  restartStrategy();
+}
+
+function stopGSMTCPoll() {
+  if (gsmPollId) {
+    clearInterval(gsmPollId);
+    gsmPollId = null;
+  }
+}
+
+function startGSMTCPoll() {
+  stopGSMTCPoll();
+  const poll = async () => {
+    try {
+      const d = await window.__TAURI__.core.invoke("get_current_playing_gsmtc");
+
+      // DEBUG: see the actual app id so we can tweak matching if needed
+      if (d?.source_app_id) {
+        console.log("[GSMTC] source_app_id:", d.source_app_id);
+      }
+
+      renderGSMTC(d);
+    } catch (e) {
+      console.warn(e);
+    }
+  };
+  poll();
+  gsmPollId = setInterval(poll, 2000);
+}
+
+let spotifyUnsub = null;
+async function startSpotifyListener() {
+  stopSpotifyListener();
+  spotifyUnsub = await window.__TAURI__.event.listen(
+    "now_playing_update",
+    (evt) => {
+      render(evt.payload);
+    }
+  );
+}
+function stopSpotifyListener() {
+  if (typeof spotifyUnsub === "function") {
+    spotifyUnsub();
+    spotifyUnsub = null;
+  }
+}
+
+function restartStrategy() {
+  if (sourceMode === "gsmtc") {
+    stopSpotifyListener();
+    startGSMTCPoll();
+  } else {
+    stopGSMTCPoll();
+    startSpotifyListener();
+  }
+}
+
+function matchesSelectedApp(d) {
+  const idRaw = d?.source_app_id || "";
+  const id = idRaw.toLowerCase();
+
+  // Heuristics for common AUMIDs on Windows:
+  // Spotify (Store + desktop builds)
+  const isSpotify =
+    id.includes("spotify");
+
+  // Apple Music candidates:
+  const isApple =
+    id.includes("applemusicwin11") ||
+    id.includes("appleinc.applemusic") ||
+    id.includes("applemusic") ||
+    id.includes("appleinc.itunes") ||
+    id.includes("itunes");
+
+  // YouTube Music candidates:
+  const isYouTubeMusic =
+    id.includes("youtubemusic") ||
+    id.includes("youtube_music") ||
+    (id.includes("google") && id.includes("music") && id.includes("youtube"));
+
+  // Optional lenient: catch some PWA launcher shapes
+  // (This still requires the AUMID to mention YouTube Music somewhere,
+  // so regular browser tabs won't be picked up.)
+  const isYouTubeMusicPWAish =
+    isYouTubeMusic ||
+    ((id.includes("pwa") || id.includes("pwalauncher")) && id.includes("youtube"));
+
+  switch (gsmtcAppFilter) {
+    case "spotify":
+      return isSpotify;
+    case "apple":
+      return isApple;
+    case "ytm":
+      return isYouTubeMusicPWAish;
+    default:
+      return false;
+  }
+}
+
+function isSpotifyGSMTC(d) {
+  return (d?.source_app_id || "").toLowerCase().includes("spotify");
+}
+
+function renderGSMTC(d) {
+  // Only show the selected app
+  if (!matchesSelectedApp(d)) {
+    render({ is_playing: false });
+    return;
+  }
+
+  const status = (d?.status || "").toLowerCase();
+  const active =
+    ["playing", "paused"].includes(status) || d?.position_ms != null;
+  if (!active) {
+    render({ is_playing: false });
+    return;
+  }
+
+  const track_name = (d?.title || "").trim();
+  const artists = (d?.artist || "").trim();
+  const album = (d?.album || "").trim();
+
+  render({
+    is_playing: true,
+    track_name,
+    artists,
+    album,
+    artwork_url: null,
+    artwork_path: d?.artwork_path || null,
+  });
+}
 
 function getTheme() {
   return {
@@ -177,7 +317,8 @@ function render(d) {
 
   slidePanel(true);
   const title = d.track_name;
-  const meta = d.artists;
+  const meta =
+    typeof d.artists === "string" ? d.artists : (d.artists || []).join(", ");
   const art = resolveArtUrl(d);
   const key = `${title}|${meta}|${art}`;
 
@@ -207,21 +348,50 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   const { event, core } = tauri;
 
-  // Theme: receive updates & request the current theme when we open
+  // Theme channel (unchanged)
   await event.listen("theme_update", (evt) => applyTheme(evt.payload));
   await event.emit("request_theme");
 
-  // Now playing updates
-  await event.listen("now_playing_update", (evt) => {
-    console.log("[widget] update", evt.payload);
-    render(evt.payload);
+  // Source mode channel: keep in sync with main window
+  await event.listen("source_mode_update", (evt) => {
+    const mode = evt?.payload?.mode;
+    if (mode) setSourceMode(mode);
   });
 
-  // Seed once
+  // Ask main window what to use
+  await event.emit("request_source_mode");
+
+  await event.listen("gsmtc_app_filter_update", (evt) => {
+    const v = evt?.payload?.value;
+    if (v) {
+      gsmtcAppFilter = v;
+      localStorage.setItem(GSMTC_APP_KEY, v);
+    }
+  });
+
+  // Ask main for the current filter when we load
+  await event.emit("request_gsmtc_app_filter");
+
+  // Fallback if we didn’t hear back quickly (rare):
+  setTimeout(() => {
+    if (!sourceMode)
+      setSourceMode(localStorage.getItem(SOURCE_KEY) || "spotify");
+  }, 500);
+
+  // Seed a first frame for whichever source we end up on
+  // We don’t know the mode yet, but we can attempt both safely:
   try {
+    // Spotify seed (may fail if not connected)
     const d = await core.invoke("get_current_playing");
-    render(d);
-  } catch (e) {
-    console.error("[widget] seed failed", e);
-  }
+    if (d?.track_name || d?.is_playing) render(d);
+  } catch {}
+
+  try {
+    // GSMTC seed (cheap, doesn’t interfere)
+    const g = await core.invoke("get_current_playing_gsmtc");
+    renderGSMTC(g);
+  } catch {}
+
+  // Start the strategy (it will be replaced once source_mode_update arrives)
+  restartStrategy();
 });
