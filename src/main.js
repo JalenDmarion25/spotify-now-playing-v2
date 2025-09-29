@@ -11,7 +11,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   const exportToggle = document.getElementById("export-toggle");
   const out = await window.__TAURI__.core.invoke("get_current_playing_gsmtc");
   const sourceSelect = document.getElementById("source-mode");
+  const connectForm = document.getElementById("connect-form");
+  const chooseBtn = document.getElementById("choose-folder");
+  const gsmtcFilterRow = document.getElementById("gsmtc-filter-row");
+  const gsmtcAppFilter = document.getElementById("gsmtc-app-filter");
   const SOURCE_KEY = "source:mode"; // "spotify" | "gsmtc"
+  const GSMTC_APP_KEY = "gsmtc:app"; // "spotify" | "apple" | "ytm"
 
   function getSourceMode() {
     return localStorage.getItem(SOURCE_KEY) || "spotify";
@@ -27,12 +32,24 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   if (sourceSelect) {
     // init select from saved pref
-    sourceSelect.value = getSourceMode();
+    const initialMode = getSourceMode();
+    sourceSelect.value = initialMode;
+    applySourceVisibility(initialMode);
+
+    if (gsmtcAppFilter) {
+      gsmtcAppFilter.addEventListener("change", async (e) => {
+        const v = e.target.value || "spotify";
+        localStorage.setItem(GSMTC_APP_KEY, v);
+        await broadcastGSMTCAppFilter(v);
+      });
+    }
 
     sourceSelect.addEventListener("change", async (e) => {
       const next = e.target.value === "gsmtc" ? "gsmtc" : "spotify";
       setSourceMode(next);
+      applySourceVisibility(next); // ← apply on change
       await broadcastSourceMode(next);
+      await broadcastGSMTCAppFilter(getGSMTCAppFilter());
     });
   }
   console.log("[GSMTC View]", out);
@@ -103,6 +120,25 @@ document.addEventListener("DOMContentLoaded", async () => {
       : "Art folder: (none set)";
   };
 
+  function applySourceVisibility(mode) {
+    const isGsmtc = mode === "gsmtc";
+    if (connectForm) connectForm.style.display = isGsmtc ? "none" : "";
+    if (chooseBtn) chooseBtn.style.display = isGsmtc ? "none" : "";
+    if (statusEl) statusEl.style.display = isGsmtc ? "none" : "";
+    if (localDirEl) localDirEl.style.display = isGsmtc ? "none" : "";
+    if (gsmtcFilterRow) gsmtcFilterRow.style.display = isGsmtc ? "" : "none";
+  }
+
+  function getGSMTCAppFilter() {
+    return localStorage.getItem(GSMTC_APP_KEY) || "spotify";
+  }
+
+  async function broadcastGSMTCAppFilter(value = getGSMTCAppFilter()) {
+    try {
+      await window.__TAURI__.event.emit("gsmtc_app_filter_update", { value });
+    } catch {}
+  }
+
   function getTheme() {
     return {
       bg: localStorage.getItem(THEME_KEYS.bg) || "#2f2f2f",
@@ -135,10 +171,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Broadcast current source once on boot (widget will pick it up)
   broadcastSourceMode(getSourceMode());
+  broadcastGSMTCAppFilter(getGSMTCAppFilter());
 
   // Respond when a window asks for the current source
-  await listen("request_source_mode", async () => {
-    await broadcastSourceMode(getSourceMode());
+  await listen("request_gsmtc_app_filter", async () => {
+    await broadcastGSMTCAppFilter(getGSMTCAppFilter());
   });
 
   // Respond when someone asks for the current theme (widget/settings)
@@ -344,7 +381,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // choose local folder (requires tauri-plugin-dialog on the Rust side)
-  const chooseBtn = document.getElementById("choose-folder");
   if (chooseBtn) {
     chooseBtn.addEventListener("click", async () => {
       const dir = await open({ directory: true, multiple: false });

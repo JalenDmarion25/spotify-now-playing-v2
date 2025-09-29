@@ -11,6 +11,8 @@ let lastKey = "";
 // --- THEME (local preview only; actual source of truth is main window) ---
 const THEME_KEYS = { bg: "theme:bg", title: "theme:title", meta: "theme:meta" };
 const SOURCE_KEY = "source:mode";
+const GSMTC_APP_KEY = "gsmtc:app"; // "spotify" | "apple" | "ytm"
+let gsmtcAppFilter = localStorage.getItem(GSMTC_APP_KEY) || "spotify";
 let sourceMode = "spotify"; // default
 let gsmPollId = null;
 
@@ -32,7 +34,13 @@ function startGSMTCPoll() {
   const poll = async () => {
     try {
       const d = await window.__TAURI__.core.invoke("get_current_playing_gsmtc");
-      renderGSMTC(d); // convert + render
+
+      // DEBUG: see the actual app id so we can tweak matching if needed
+      if (d?.source_app_id) {
+        console.log("[GSMTC] source_app_id:", d.source_app_id);
+      }
+
+      renderGSMTC(d);
     } catch (e) {
       console.warn(e);
     }
@@ -68,17 +76,70 @@ function restartStrategy() {
   }
 }
 
-function renderGSMTC(d) {
-  const status = (d?.status || "").toLowerCase();
-  const active = ["playing", "paused"].includes(status) || d?.position_ms != null;
+function matchesSelectedApp(d) {
+  const idRaw = d?.source_app_id || "";
+  const id = idRaw.toLowerCase();
 
+  // Heuristics for common AUMIDs on Windows:
+  // Spotify (Store + desktop builds)
+  const isSpotify =
+    id.includes("spotify");
+
+  // Apple Music candidates:
+  const isApple =
+    id.includes("applemusicwin11") ||
+    id.includes("appleinc.applemusic") ||
+    id.includes("applemusic") ||
+    id.includes("appleinc.itunes") ||
+    id.includes("itunes");
+
+  // YouTube Music candidates:
+  const isYouTubeMusic =
+    id.includes("youtubemusic") ||
+    id.includes("youtube_music") ||
+    (id.includes("google") && id.includes("music") && id.includes("youtube"));
+
+  // Optional lenient: catch some PWA launcher shapes
+  // (This still requires the AUMID to mention YouTube Music somewhere,
+  // so regular browser tabs won't be picked up.)
+  const isYouTubeMusicPWAish =
+    isYouTubeMusic ||
+    ((id.includes("pwa") || id.includes("pwalauncher")) && id.includes("youtube"));
+
+  switch (gsmtcAppFilter) {
+    case "spotify":
+      return isSpotify;
+    case "apple":
+      return isApple;
+    case "ytm":
+      return isYouTubeMusicPWAish;
+    default:
+      return false;
+  }
+}
+
+function isSpotifyGSMTC(d) {
+  return (d?.source_app_id || "").toLowerCase().includes("spotify");
+}
+
+function renderGSMTC(d) {
+  // Only show the selected app
+  if (!matchesSelectedApp(d)) {
+    render({ is_playing: false });
+    return;
+  }
+
+  const status = (d?.status || "").toLowerCase();
+  const active =
+    ["playing", "paused"].includes(status) || d?.position_ms != null;
   if (!active) {
     render({ is_playing: false });
     return;
   }
+
   const track_name = (d?.title || "").trim();
-  const artists    = (d?.artist || "").trim(); // widget expects string ok
-  const album      = (d?.album || "").trim();
+  const artists = (d?.artist || "").trim();
+  const album = (d?.album || "").trim();
 
   render({
     is_playing: true,
@@ -256,7 +317,8 @@ function render(d) {
 
   slidePanel(true);
   const title = d.track_name;
-  const meta = typeof d.artists === "string" ? d.artists : (d.artists || []).join(", ");
+  const meta =
+    typeof d.artists === "string" ? d.artists : (d.artists || []).join(", ");
   const art = resolveArtUrl(d);
   const key = `${title}|${meta}|${art}`;
 
@@ -280,7 +342,6 @@ function render(d) {
   }
 }
 
-
 window.addEventListener("DOMContentLoaded", async () => {
   const tauri = window.__TAURI__;
   if (!tauri) return console.error("[widget] __TAURI__ not found");
@@ -300,9 +361,21 @@ window.addEventListener("DOMContentLoaded", async () => {
   // Ask main window what to use
   await event.emit("request_source_mode");
 
+  await event.listen("gsmtc_app_filter_update", (evt) => {
+    const v = evt?.payload?.value;
+    if (v) {
+      gsmtcAppFilter = v;
+      localStorage.setItem(GSMTC_APP_KEY, v);
+    }
+  });
+
+  // Ask main for the current filter when we load
+  await event.emit("request_gsmtc_app_filter");
+
   // Fallback if we didn’t hear back quickly (rare):
   setTimeout(() => {
-    if (!sourceMode) setSourceMode(localStorage.getItem(SOURCE_KEY) || "spotify");
+    if (!sourceMode)
+      setSourceMode(localStorage.getItem(SOURCE_KEY) || "spotify");
   }, 500);
 
   // Seed a first frame for whichever source we end up on
@@ -322,4 +395,3 @@ window.addEventListener("DOMContentLoaded", async () => {
   // Start the strategy (it will be replaced once source_mode_update arrives)
   restartStrategy();
 });
-
