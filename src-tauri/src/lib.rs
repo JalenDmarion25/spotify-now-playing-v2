@@ -57,6 +57,41 @@ pub struct ExportPayload {
     artwork_path: Option<String>,
 }
 
+fn looks_like_artists_block(s: &str) -> bool {
+    let l = s.to_ascii_lowercase();
+    // Signal characters/words that usually mean "multiple artists listed"
+    l.contains(',')
+        || l.contains('&')
+        || l.contains('＆')
+        || l.contains(" x ")
+        || l.contains('×')
+        || l.contains(" + ")
+        || l.contains('＋')
+        || l.contains(" feat")
+        || l.contains(" ft")
+        || l.contains(" with ")
+        || l.contains(" vs ")
+}
+
+fn parse_artists_prefix_from_title(s: &str) -> Vec<String> {
+    // Try to split "ARTISTS —/–/-/: Track"
+    // Use the first dash/colon we find.
+    let mut idx = None;
+    for (i, ch) in s.char_indices() {
+        if ch == '-' || ch == '—' || ch == '–' || ch == ':' || ch == '：' {
+            idx = Some(i);
+            break;
+        }
+    }
+    if let Some(i) = idx {
+        let lhs = s[..i].trim();
+        if looks_like_artists_block(lhs) {
+            return parse_artists(lhs);
+        }
+    }
+    Vec::new()
+}
+
 fn parse_artists(raw: &str) -> Vec<String> {
     let re = Regex::new(
         r#"(?ix)
@@ -67,15 +102,18 @@ fn parse_artists(raw: &str) -> Vec<String> {
           \s+x\s+ | \s+ｘ\s+ | \s+\+\s+ | \s+＋\s+
         )
         \s*
-        "#
-    ).unwrap();
+        "#,
+    )
+    .unwrap();
 
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
 
     for part in re.split(raw) {
         let name = clean_person(part);
-        if name.is_empty() { continue; }
+        if name.is_empty() {
+            continue;
+        }
         if seen.insert(name.to_ascii_lowercase()) {
             out.push(name);
         }
@@ -87,15 +125,13 @@ fn parse_artists(raw: &str) -> Vec<String> {
     out
 }
 
-
 fn clean_person(name: &str) -> String {
     // Trim ASCII + full-width brackets, quotes, dashes, bullets, etc. from both ends.
     const TRIM: &[char] = &[
-        ' ', '\t', '\n', '\r',
-        ',', '，', '、', ';', '；', ':', '：', '.', '．',
-        '/', '／', '|', '｜', '&', '＆', '+', '＋', '×', '･', '・', '·',
-        '(', ')', '[', ']', '{', '}', '＜', '＞', '<', '>', '（', '）', '「', '」', '『', '』', '【', '】', '《', '》',
-        '"', '“', '”', '‘', '’', '\'', '–', '—', '−', '-', '•', '●',
+        ' ', '\t', '\n', '\r', ',', '，', '、', ';', '；', ':', '：', '.', '．', '/', '／', '|',
+        '｜', '&', '＆', '+', '＋', '×', '･', '・', '·', '(', ')', '[', ']', '{', '}', '＜', '＞',
+        '<', '>', '（', '）', '「', '」', '『', '』', '【', '】', '《', '》', '"', '“', '”', '‘',
+        '’', '\'', '–', '—', '−', '-', '•', '●',
     ];
     let mut s = name.trim_matches(TRIM);
     // collapse inner whitespace
@@ -103,16 +139,47 @@ fn clean_person(name: &str) -> String {
     collapsed
 }
 
+fn has_any_upper(s: &str) -> bool {
+    s.chars().any(|c| c.is_uppercase())
+}
+fn alpha_len(s: &str) -> usize {
+    s.chars().filter(|c| c.is_alphabetic()).count()
+}
+fn is_short_acronym(s: &str) -> bool {
+    let n = alpha_len(s);
+    n > 0
+        && n <= 4
+        && s.chars()
+            .filter(|c| c.is_alphabetic())
+            .all(|c| c.is_uppercase())
+}
+fn better_cased(existing: &str, candidate: &str) -> bool {
+    // Prefer any candidate that has uppercase when existing has none
+    if !has_any_upper(existing) && has_any_upper(candidate) {
+        return true;
+    }
+    // Prefer short all-caps acronyms like SZA, JPEG, BTS, etc.
+    if is_short_acronym(candidate) && !is_short_acronym(existing) {
+        return true;
+    }
+    false
+}
 
 fn dedup_push(list: &mut Vec<String>, name: &str) {
     let n = clean_person(name);
-    if n.is_empty() { return; }
-    let key = n.to_ascii_lowercase();
-    if !list.iter().any(|e| e.eq_ignore_ascii_case(&n)) {
+    if n.is_empty() {
+        return;
+    }
+
+    if let Some(idx) = list.iter().position(|e| e.eq_ignore_ascii_case(&n)) {
+        // Upgrade casing if the new one looks better
+        if better_cased(&list[idx], &n) {
+            list[idx] = n;
+        }
+    } else {
         list.push(n);
     }
 }
-
 
 fn parse_featured_from_title(title: &str) -> Vec<String> {
     // Supports ASCII ()[] and JP full-width （）【】「」『』 and both :/：.
@@ -124,8 +191,9 @@ fn parse_featured_from_title(title: &str) -> Vec<String> {
         [\s:：\-]*                              # spaces/colon (ASCII/JP)/dash
         ([^)\]）】』」]+)                        # capture names until a closing bracket
         (?:\)|\]|）|】|』|」)?                   # optional closing bracket
-        "#
-    ).unwrap();
+        "#,
+    )
+    .unwrap();
 
     let mut out = Vec::new();
     for cap in re.captures_iter(title) {
@@ -136,7 +204,6 @@ fn parse_featured_from_title(title: &str) -> Vec<String> {
     }
     out
 }
-
 
 fn sanitize(s: &str) -> String {
     let trimmed = s.trim();
@@ -708,6 +775,15 @@ async fn get_current_playing_gsmtc(window: tauri::Window) -> Result<serde_json::
 
                 let mut artists_vec: Vec<String> = Vec::new();
 
+                if artists_vec.len() <= 1 {
+                    for n in parse_artists_prefix_from_title(&title) {
+                        dedup_push(&mut artists_vec, &n);
+                    }
+                    for n in parse_artists_prefix_from_title(&subtitle) {
+                        dedup_push(&mut artists_vec, &n);
+                    }
+                }
+
                 // Primary “Artist”
                 for n in parse_artists(&artist) {
                     dedup_push(&mut artists_vec, &n);
@@ -723,12 +799,24 @@ async fn get_current_playing_gsmtc(window: tauri::Window) -> Result<serde_json::
                     dedup_push(&mut artists_vec, &n);
                 }
 
-                // Some apps put extra names in Subtitle
-                for n in parse_artists(&subtitle) {
-                    dedup_push(&mut artists_vec, &n);
+                // Only trust subtitle if it *looks* like a list of artists (commas, &, x, +, feat, etc.)
+                if looks_like_artists_block(&subtitle) {
+                    for n in parse_artists(&subtitle) {
+                        dedup_push(&mut artists_vec, &n);
+                    }
                 }
+
+                // Also catch "(feat ...)" shapes inside the subtitle
                 for n in parse_featured_from_title(&subtitle) {
                     dedup_push(&mut artists_vec, &n);
+                }
+
+                // If we already have a proper multi-letter artist, drop stray 1-letter tokens like "Y"
+                let have_multi_alpha = artists_vec
+                    .iter()
+                    .any(|n| n.chars().filter(|c| c.is_alphabetic()).count() > 1);
+                if have_multi_alpha {
+                    artists_vec.retain(|n| n.chars().filter(|c| c.is_alphabetic()).count() > 1);
                 }
 
                 // Thumbnail → bytes → cache file
