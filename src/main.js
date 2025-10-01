@@ -10,7 +10,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   const artworkEl = document.getElementById("artwork"); // may be null
   const exportToggle = document.getElementById("export-toggle");
   const out = await window.__TAURI__.core.invoke("get_current_playing_gsmtc");
-  const sourceSelect = document.getElementById("source-mode");
   const connectForm = document.getElementById("connect-form");
   const chooseBtn = document.getElementById("choose-folder");
   const gsmtcFilterRow = document.getElementById("gsmtc-filter-row");
@@ -107,29 +106,86 @@ document.addEventListener("DOMContentLoaded", async () => {
     } catch {}
   }
 
-  if (sourceSelect) {
-    // init select from saved pref
-    const initialMode = getSourceMode();
-    sourceSelect.value = initialMode;
-    applySourceVisibility(initialMode);
-
-    if (gsmtcAppFilter) {
-      gsmtcAppFilter.addEventListener("change", async (e) => {
-        const v = e.target.value || "spotify";
-        localStorage.setItem(GSMTC_APP_KEY, v);
-        await broadcastGSMTCAppFilter(v);
-      });
-    }
-
-    sourceSelect.addEventListener("change", async (e) => {
-      const next = e.target.value === "gsmtc" ? "gsmtc" : "spotify";
-      setSourceMode(next);
-      applySourceVisibility(next); // ← apply on change
-      await broadcastSourceMode(next);
-      await broadcastGSMTCAppFilter(getGSMTCAppFilter());
-    });
-  }
+  
   console.log("[GSMTC View]", out);
+
+function makeDropdown(rootEl, { get, set, onChange, labelMap }) {
+  if (!rootEl) return null;
+  const toggleBtn = rootEl.querySelector(".dd-toggle");
+  const labelEl   = rootEl.querySelector(".dd-label");
+  const menuEl    = rootEl.querySelector(".dd-menu");
+  const options   = Array.from(menuEl.querySelectorAll('[role="option"]'));
+
+  // prevent window-drag from swallowing clicks
+  rootEl.style.webkitAppRegion = "no-drag";
+  toggleBtn.style.webkitAppRegion = "no-drag";
+  menuEl.style.webkitAppRegion = "no-drag";
+
+  function open()  { rootEl.classList.add("open");  toggleBtn.setAttribute("aria-expanded","true"); }
+  function close() { rootEl.classList.remove("open");toggleBtn.setAttribute("aria-expanded","false"); }
+  function toggle(){ rootEl.classList.contains("open") ? close() : open(); }
+
+  toggleBtn.addEventListener("click", (e)=>{ e.stopPropagation(); toggle(); });
+  document.addEventListener("click", (e)=>{ if (!rootEl.contains(e.target)) close(); });
+  document.addEventListener("keydown", (e)=>{ if (e.key === "Escape") close(); });
+
+  async function choose(value) {
+    set(value);
+
+    // reflect UI
+    labelEl.textContent = labelMap?.[value] ?? value;
+    rootEl.dataset.value = value;
+    options.forEach(o => o.setAttribute("aria-selected", String(o.dataset.value === value)));
+
+    await onChange?.(value);
+    close();
+  }
+
+  options.forEach(o => {
+    o.addEventListener("click", (e)=>{ e.stopPropagation(); choose(o.dataset.value); });
+    o.addEventListener("keydown", (e)=>{
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); choose(o.dataset.value); }
+      if (e.key === "Escape") close();
+    });
+  });
+
+  // init from storage
+  const initial = get();
+  labelEl.textContent = labelMap?.[initial] ?? initial;
+  rootEl.dataset.value = initial;
+  options.forEach(o => o.setAttribute("aria-selected", String(o.dataset.value === initial)));
+
+  return { choose };
+}
+
+// ---- Make #source-dd the single source of truth
+const SOURCE_LABELS = {
+  gsmtc:  "Windows GSMTC (Recommended)",
+  spotify:"Spotify API",
+};
+
+const sourceDdEl = document.getElementById("source-dd");
+
+const sourceDD = makeDropdown(sourceDdEl, {
+  get: () => getSourceMode(),                 // uses your SOURCE_KEY
+  set: (mode) => setSourceMode(mode),
+  onChange: async (mode) => {
+    // show/hide UI areas for each mode
+    applySourceVisibility(mode);
+
+    // notify other windows
+    await broadcastSourceMode(mode);
+
+    // keep GSMTC app filter broadcast in step, like your old select handler
+    await broadcastGSMTCAppFilter(getGSMTCAppFilter());
+  },
+  labelMap: SOURCE_LABELS,
+});
+
+const initialMode = getSourceMode();
+applySourceVisibility(initialMode);
+broadcastSourceMode(initialMode);
+broadcastGSMTCAppFilter(getGSMTCAppFilter());
 
   // --- Poll GSMTC and log when the track changes ---
   let lastGSMTCKey = "";

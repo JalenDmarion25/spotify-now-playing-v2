@@ -9,12 +9,55 @@
   </head>
 
   <main class="container">
-    <div class="row">
-      <label for="source-mode">Now Playing Source:</label>
-      <select id="source-mode">
-        <option value="gsmtc">Windows GSMTC (Recommended)</option>
-        <option value="spotify">Spotify API</option>
-      </select>
+    <label for="source-dd-btn">Now Playing Source:</label>
+
+    <!-- Custom dropdown -->
+    <div class="dd" id="source-dd" data-value="gsmtc">
+      <button
+        id="source-dd-btn"
+        class="dd-toggle"
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded="false"
+      >
+        <span class="dd-label" id="source-dd-label"
+          >Windows GSMTC (Recommended)</span
+        >
+        <svg width="12" height="8" viewBox="0 0 12 8" aria-hidden="true">
+          <path
+            d="M1 1l5 5 5-5"
+            stroke="currentColor"
+            stroke-width="2"
+            fill="none"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      </button>
+
+      <div
+        class="dd-menu"
+        id="dd-source-menu"
+        role="listbox"
+        aria-labelledby="source-dd-btn"
+      >
+        <span
+          role="option"
+          data-value="gsmtc"
+          aria-selected="true"
+          tabindex="0"
+        >
+          Windows GSMTC (Recommended)
+        </span>
+        <span
+          role="option"
+          data-value="spotify"
+          aria-selected="false"
+          tabindex="0"
+        >
+          Spotify API
+        </span>
+      </div>
     </div>
 
     <div id="gsmtc-filter-row" class="row">
@@ -42,7 +85,12 @@
           </svg>
         </button>
 
-        <div class="dd-menu" role="listbox" aria-labelledby="gsmtc-dd-btn">
+        <div
+          class="dd-menu"
+          id="gsmtc-dd-menu"
+          role="listbox"
+          aria-labelledby="gsmtc-dd-btn"
+        >
           <span
             role="option"
             data-value="spotify"

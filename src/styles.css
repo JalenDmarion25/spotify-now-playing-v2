@@ -131,18 +131,25 @@ select:active {
   -webkit-app-region: no-drag;
 }
 
-/* Stack options vertically and center them */
-.dd-menu {
-  position: absolute;
+#dd-source-menu{
+    top: 135px;
+    left: 23px;
+}
+
+#gsmtc-dd-menu{
   left: 98px;
   right: 0;
   top: 208px;
+}
+
+/* Stack options vertically and center them */
+.dd-menu {
+  position: absolute;
   border-radius: 10px;
   overflow: hidden;
   color: #0f0f0f;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   width: fit-content;
-
   /* 👇 force vertical stacking */
   display: none;
   display: none; /* closed by default */
