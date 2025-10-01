@@ -138,13 +138,17 @@ function renderGSMTC(d) {
   }
 
   const track_name = (d?.title || "").trim();
-  const artists = (d?.artist || "").trim();
+  // ✅ prefer the array, fallback to single string
+  const artists =
+    Array.isArray(d?.artists) && d.artists.length
+      ? d.artists
+      : (d?.artist || "").trim();
   const album = (d?.album || "").trim();
 
   render({
     is_playing: true,
     track_name,
-    artists,
+    artists,            // ← now an array when available
     album,
     artwork_url: null,
     artwork_path: d?.artwork_path || null,

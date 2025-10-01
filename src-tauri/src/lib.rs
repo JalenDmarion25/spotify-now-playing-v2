@@ -3,6 +3,7 @@ use lofty::prelude::{Accessor, TaggedFileExt};
 use lofty::probe::Probe;
 use parking_lot::lock_api::Mutex;
 use parking_lot::Mutex as PlMutex;
+use regex::Regex;
 use rspotify::{
     clients::{BaseClient, OAuthClient},
     model::{Image, PlayableItem},
@@ -56,6 +57,87 @@ pub struct ExportPayload {
     artwork_path: Option<String>,
 }
 
+fn parse_artists(raw: &str) -> Vec<String> {
+    let re = Regex::new(
+        r#"(?ix)
+        \s*
+        (?:
+          , | ， | ; | & | ＆ | / | ／ | \| | ｜ | × | ・ | ･ | ・ | 、 | · | • |
+          \bfeat\.?\b | \bfeaturing\.?\b | \bft\.?\b | \bwith\b | \bvs\.?\b |
+          \s+x\s+ | \s+ｘ\s+ | \s+\+\s+ | \s+＋\s+
+        )
+        \s*
+        "#
+    ).unwrap();
+
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+
+    for part in re.split(raw) {
+        let name = clean_person(part);
+        if name.is_empty() { continue; }
+        if seen.insert(name.to_ascii_lowercase()) {
+            out.push(name);
+        }
+    }
+
+    if out.is_empty() && !raw.trim().is_empty() {
+        out.push(clean_person(raw));
+    }
+    out
+}
+
+
+fn clean_person(name: &str) -> String {
+    // Trim ASCII + full-width brackets, quotes, dashes, bullets, etc. from both ends.
+    const TRIM: &[char] = &[
+        ' ', '\t', '\n', '\r',
+        ',', '，', '、', ';', '；', ':', '：', '.', '．',
+        '/', '／', '|', '｜', '&', '＆', '+', '＋', '×', '･', '・', '·',
+        '(', ')', '[', ']', '{', '}', '＜', '＞', '<', '>', '（', '）', '「', '」', '『', '』', '【', '】', '《', '》',
+        '"', '“', '”', '‘', '’', '\'', '–', '—', '−', '-', '•', '●',
+    ];
+    let mut s = name.trim_matches(TRIM);
+    // collapse inner whitespace
+    let collapsed = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    collapsed
+}
+
+
+fn dedup_push(list: &mut Vec<String>, name: &str) {
+    let n = clean_person(name);
+    if n.is_empty() { return; }
+    let key = n.to_ascii_lowercase();
+    if !list.iter().any(|e| e.eq_ignore_ascii_case(&n)) {
+        list.push(n);
+    }
+}
+
+
+fn parse_featured_from_title(title: &str) -> Vec<String> {
+    // Supports ASCII ()[] and JP full-width （）【】「」『』 and both :/：.
+    // Also recognizes &, ＆, x/ｘ, +/＋.
+    let re = Regex::new(
+        r#"(?ix)
+        (?:\(|\[|（|【|『|「)?                 # optional opening bracket (ASCII or JP)
+        (?:feat(?:uring)?\.?|ft\.?|with|vs\.?|&|＆|x|ｘ|\+|＋)  # connector
+        [\s:：\-]*                              # spaces/colon (ASCII/JP)/dash
+        ([^)\]）】』」]+)                        # capture names until a closing bracket
+        (?:\)|\]|）|】|』|」)?                   # optional closing bracket
+        "#
+    ).unwrap();
+
+    let mut out = Vec::new();
+    for cap in re.captures_iter(title) {
+        let chunk = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        for n in parse_artists(chunk) {
+            dedup_push(&mut out, &n);
+        }
+    }
+    out
+}
+
+
 fn sanitize(s: &str) -> String {
     let trimmed = s.trim();
     if trimmed.is_empty() {
@@ -100,6 +182,7 @@ fn build_local_index(dir: &Path) -> HashMap<String, PathBuf> {
                 .artist()
                 .unwrap_or(std::borrow::Cow::Borrowed(""))
                 .to_string();
+
             let album = t
                 .album()
                 .unwrap_or(std::borrow::Cow::Borrowed(""))
@@ -555,11 +638,8 @@ async fn restore_spotify(
     Ok(false)
 }
 
-
 #[tauri::command]
-async fn get_current_playing_gsmtc(
-    window: tauri::Window,
-) -> Result<serde_json::Value, String> {
+async fn get_current_playing_gsmtc(window: tauri::Window) -> Result<serde_json::Value, String> {
     use futures::executor::block_on;
 
     let app_handle = window.app_handle().clone();
@@ -570,7 +650,7 @@ async fn get_current_playing_gsmtc(
             let result = block_on(async move {
                 use windows::Media::Control::{
                     GlobalSystemMediaTransportControlsSession,
-                    GlobalSystemMediaTransportControlsSessionManager
+                    GlobalSystemMediaTransportControlsSessionManager,
                 };
                 use windows::Storage::Streams::{DataReader, InputStreamOptions};
 
@@ -579,25 +659,26 @@ async fn get_current_playing_gsmtc(
                     .await
                     .map_err(|e| format!("Await manager failed: {:?}", e))?;
 
-                let session: Option<GlobalSystemMediaTransportControlsSession> =
-                    match mgr.GetSessions() {
-                        Ok(list) => {
-                            let n = list.Size().unwrap_or(0);
-                            let mut picked = None;
-                            for i in 0..n {
-                                if let Ok(s) = list.GetAt(i) {
-                                    if let Ok(aumid) = s.SourceAppUserModelId() {
-                                        if aumid.to_string().to_ascii_lowercase().contains("spotify") {
-                                            picked = Some(s);
-                                            break;
-                                        }
+                let session: Option<GlobalSystemMediaTransportControlsSession> = match mgr
+                    .GetSessions()
+                {
+                    Ok(list) => {
+                        let n = list.Size().unwrap_or(0);
+                        let mut picked = None;
+                        for i in 0..n {
+                            if let Ok(s) = list.GetAt(i) {
+                                if let Ok(aumid) = s.SourceAppUserModelId() {
+                                    if aumid.to_string().to_ascii_lowercase().contains("spotify") {
+                                        picked = Some(s);
+                                        break;
                                     }
                                 }
                             }
-                            picked.or_else(|| mgr.GetCurrentSession().ok())
                         }
-                        Err(_) => mgr.GetCurrentSession().ok(),
-                    };
+                        picked.or_else(|| mgr.GetCurrentSession().ok())
+                    }
+                    Err(_) => mgr.GetCurrentSession().ok(),
+                };
 
                 let Some(session) = session else {
                     return Ok::<(serde_json::Value, Option<String>), String>((
@@ -619,9 +700,36 @@ async fn get_current_playing_gsmtc(
                     .await
                     .map_err(|e| format!("await media properties: {:?}", e))?;
 
-                let title  = props.Title().unwrap_or_default().to_string();
-                let album  = props.AlbumTitle().unwrap_or_default().to_string();
+                let title = props.Title().unwrap_or_default().to_string();
+                let album = props.AlbumTitle().unwrap_or_default().to_string();
                 let artist = props.Artist().unwrap_or_default().to_string();
+                let album_artist = props.AlbumArtist().unwrap_or_default().to_string();
+                let subtitle = props.Subtitle().unwrap_or_default().to_string(); // ← NEW
+
+                let mut artists_vec: Vec<String> = Vec::new();
+
+                // Primary “Artist”
+                for n in parse_artists(&artist) {
+                    dedup_push(&mut artists_vec, &n);
+                }
+
+                // AlbumArtist often has multiple names (labels, teams, etc.)
+                for n in parse_artists(&album_artist) {
+                    dedup_push(&mut artists_vec, &n);
+                }
+
+                // Contributors embedded in the Title (“feat. …”, “with …”)
+                for n in parse_featured_from_title(&title) {
+                    dedup_push(&mut artists_vec, &n);
+                }
+
+                // Some apps put extra names in Subtitle
+                for n in parse_artists(&subtitle) {
+                    dedup_push(&mut artists_vec, &n);
+                }
+                for n in parse_featured_from_title(&subtitle) {
+                    dedup_push(&mut artists_vec, &n);
+                }
 
                 // Thumbnail → bytes → cache file
                 let mut artwork_path: Option<String> = None;
@@ -645,7 +753,8 @@ async fn get_current_playing_gsmtc(
                                     .map_err(|e| format!("LoadAsync await: {:?}", e))?;
 
                                 let mut bytes = vec![0u8; size as usize];
-                                reader.ReadBytes(bytes.as_mut_slice())
+                                reader
+                                    .ReadBytes(bytes.as_mut_slice())
                                     .map_err(|e| format!("ReadBytes: {:?}", e))?;
 
                                 // Use the cloned app handle (not `window`) here.
@@ -656,12 +765,17 @@ async fn get_current_playing_gsmtc(
                                     .join("artcache");
                                 let _ = std::fs::create_dir_all(&cache_dir);
 
-                                let safe = |s: &str| s.chars()
-                                    .map(|c| if r#"\/:*?"<>|"#.contains(c) { '_' } else { c })
-                                    .collect::<String>();
+                                let safe = |s: &str| {
+                                    s.chars()
+                                        .map(|c| if r#"\/:*?"<>|"#.contains(c) { '_' } else { c })
+                                        .collect::<String>()
+                                };
 
                                 let png_path = cache_dir.join(format!(
-                                    "{}_{}_{}.png", safe(&artist), safe(&album), safe(&title)
+                                    "{}_{}_{}.png",
+                                    safe(&artist),
+                                    safe(&album),
+                                    safe(&title)
                                 ));
 
                                 if let Ok(img) = image::load_from_memory(&bytes) {
@@ -669,7 +783,10 @@ async fn get_current_playing_gsmtc(
                                     artwork_path = Some(png_path.to_string_lossy().to_string());
                                 } else {
                                     let raw_path = cache_dir.join(format!(
-                                        "{}_{}_{}.bin", safe(&artist), safe(&album), safe(&title)
+                                        "{}_{}_{}.bin",
+                                        safe(&artist),
+                                        safe(&album),
+                                        safe(&title)
                                     ));
                                     std::fs::write(&raw_path, &bytes)
                                         .map_err(|e| format!("write thumb: {e}"))?;
@@ -680,23 +797,24 @@ async fn get_current_playing_gsmtc(
                     }
                 }
 
-                let (position_ms, end_time_ms, last_updated_iso) =
-                    match session.GetTimelineProperties() {
-                        Ok(tl) => {
-                            let pos_ms = tl.Position().ok().map(|ts| ts.Duration / 10_000);
-                            let end_ms = tl.EndTime().ok().map(|ts| ts.Duration / 10_000);
-                            let last_updated =
-                                tl.LastUpdatedTime().ok().map(|dt| format!("{:?}", dt));
-                            (pos_ms, end_ms, last_updated)
-                        }
-                        Err(_) => (None, None, None),
-                    };
+                let (position_ms, end_time_ms, last_updated_iso) = match session
+                    .GetTimelineProperties()
+                {
+                    Ok(tl) => {
+                        let pos_ms = tl.Position().ok().map(|ts| ts.Duration / 10_000);
+                        let end_ms = tl.EndTime().ok().map(|ts| ts.Duration / 10_000);
+                        let last_updated = tl.LastUpdatedTime().ok().map(|dt| format!("{:?}", dt));
+                        (pos_ms, end_ms, last_updated)
+                    }
+                    Err(_) => (None, None, None),
+                };
 
                 let payload = serde_json::json!({
                     "status": status,
                     "title": title,
                     "album": album,
                     "artist": artist,
+                    "artists": artists_vec,
                     "position_ms": position_ms,
                     "end_time_ms": end_time_ms,
                     "last_updated": last_updated_iso,
@@ -704,9 +822,10 @@ async fn get_current_playing_gsmtc(
                     "artwork_path": artwork_path
                 });
 
-                Ok::<(serde_json::Value, Option<String>), String>(
-                    (payload, Some(format!("{title}|{artist}|{album}")))
-                )
+                Ok::<(serde_json::Value, Option<String>), String>((
+                    payload,
+                    Some(format!("{title}|{artist}|{album}")),
+                ))
             });
 
             result
@@ -728,8 +847,6 @@ async fn get_current_playing_gsmtc(
 
     res.map(|(payload, _)| payload)
 }
-
-
 
 #[tauri::command]
 async fn connect_spotify(

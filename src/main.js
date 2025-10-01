@@ -106,105 +106,131 @@ document.addEventListener("DOMContentLoaded", async () => {
     } catch {}
   }
 
-  
   console.log("[GSMTC View]", out);
 
-function makeDropdown(rootEl, { get, set, onChange, labelMap }) {
-  if (!rootEl) return null;
-  const toggleBtn = rootEl.querySelector(".dd-toggle");
-  const labelEl   = rootEl.querySelector(".dd-label");
-  const menuEl    = rootEl.querySelector(".dd-menu");
-  const options   = Array.from(menuEl.querySelectorAll('[role="option"]'));
+  function makeDropdown(rootEl, { get, set, onChange, labelMap }) {
+    if (!rootEl) return null;
+    const toggleBtn = rootEl.querySelector(".dd-toggle");
+    const labelEl = rootEl.querySelector(".dd-label");
+    const menuEl = rootEl.querySelector(".dd-menu");
+    const options = Array.from(menuEl.querySelectorAll('[role="option"]'));
 
-  // prevent window-drag from swallowing clicks
-  rootEl.style.webkitAppRegion = "no-drag";
-  toggleBtn.style.webkitAppRegion = "no-drag";
-  menuEl.style.webkitAppRegion = "no-drag";
+    // prevent window-drag from swallowing clicks
+    rootEl.style.webkitAppRegion = "no-drag";
+    toggleBtn.style.webkitAppRegion = "no-drag";
+    menuEl.style.webkitAppRegion = "no-drag";
 
-  function open()  { rootEl.classList.add("open");  toggleBtn.setAttribute("aria-expanded","true"); }
-  function close() { rootEl.classList.remove("open");toggleBtn.setAttribute("aria-expanded","false"); }
-  function toggle(){ rootEl.classList.contains("open") ? close() : open(); }
+    function open() {
+      rootEl.classList.add("open");
+      toggleBtn.setAttribute("aria-expanded", "true");
+    }
+    function close() {
+      rootEl.classList.remove("open");
+      toggleBtn.setAttribute("aria-expanded", "false");
+    }
+    function toggle() {
+      rootEl.classList.contains("open") ? close() : open();
+    }
 
-  toggleBtn.addEventListener("click", (e)=>{ e.stopPropagation(); toggle(); });
-  document.addEventListener("click", (e)=>{ if (!rootEl.contains(e.target)) close(); });
-  document.addEventListener("keydown", (e)=>{ if (e.key === "Escape") close(); });
-
-  async function choose(value) {
-    set(value);
-
-    // reflect UI
-    labelEl.textContent = labelMap?.[value] ?? value;
-    rootEl.dataset.value = value;
-    options.forEach(o => o.setAttribute("aria-selected", String(o.dataset.value === value)));
-
-    await onChange?.(value);
-    close();
-  }
-
-  options.forEach(o => {
-    o.addEventListener("click", (e)=>{ e.stopPropagation(); choose(o.dataset.value); });
-    o.addEventListener("keydown", (e)=>{
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); choose(o.dataset.value); }
+    toggleBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggle();
+    });
+    document.addEventListener("click", (e) => {
+      if (!rootEl.contains(e.target)) close();
+    });
+    document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") close();
     });
+
+    async function choose(value) {
+      set(value);
+
+      // reflect UI
+      labelEl.textContent = labelMap?.[value] ?? value;
+      rootEl.dataset.value = value;
+      options.forEach((o) =>
+        o.setAttribute("aria-selected", String(o.dataset.value === value))
+      );
+
+      await onChange?.(value);
+      close();
+    }
+
+    options.forEach((o) => {
+      o.addEventListener("click", (e) => {
+        e.stopPropagation();
+        choose(o.dataset.value);
+      });
+      o.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          choose(o.dataset.value);
+        }
+        if (e.key === "Escape") close();
+      });
+    });
+
+    // init from storage
+    const initial = get();
+    labelEl.textContent = labelMap?.[initial] ?? initial;
+    rootEl.dataset.value = initial;
+    options.forEach((o) =>
+      o.setAttribute("aria-selected", String(o.dataset.value === initial))
+    );
+
+    return { choose };
+  }
+
+  // ---- Make #source-dd the single source of truth
+  const SOURCE_LABELS = {
+    gsmtc: "Windows GSMTC (Recommended)",
+    spotify: "Spotify API",
+  };
+
+  const sourceDdEl = document.getElementById("source-dd");
+
+  const sourceDD = makeDropdown(sourceDdEl, {
+    get: () => getSourceMode(), // uses your SOURCE_KEY
+    set: (mode) => setSourceMode(mode),
+    onChange: async (mode) => {
+      // show/hide UI areas for each mode
+      applySourceVisibility(mode);
+
+      // notify other windows
+      await broadcastSourceMode(mode);
+
+      // keep GSMTC app filter broadcast in step, like your old select handler
+      await broadcastGSMTCAppFilter(getGSMTCAppFilter());
+    },
+    labelMap: SOURCE_LABELS,
   });
 
-  // init from storage
-  const initial = get();
-  labelEl.textContent = labelMap?.[initial] ?? initial;
-  rootEl.dataset.value = initial;
-  options.forEach(o => o.setAttribute("aria-selected", String(o.dataset.value === initial)));
-
-  return { choose };
-}
-
-// ---- Make #source-dd the single source of truth
-const SOURCE_LABELS = {
-  gsmtc:  "Windows GSMTC (Recommended)",
-  spotify:"Spotify API",
-};
-
-const sourceDdEl = document.getElementById("source-dd");
-
-const sourceDD = makeDropdown(sourceDdEl, {
-  get: () => getSourceMode(),                 // uses your SOURCE_KEY
-  set: (mode) => setSourceMode(mode),
-  onChange: async (mode) => {
-    // show/hide UI areas for each mode
-    applySourceVisibility(mode);
-
-    // notify other windows
-    await broadcastSourceMode(mode);
-
-    // keep GSMTC app filter broadcast in step, like your old select handler
-    await broadcastGSMTCAppFilter(getGSMTCAppFilter());
-  },
-  labelMap: SOURCE_LABELS,
-});
-
-const initialMode = getSourceMode();
-applySourceVisibility(initialMode);
-broadcastSourceMode(initialMode);
-broadcastGSMTCAppFilter(getGSMTCAppFilter());
+  const initialMode = getSourceMode();
+  applySourceVisibility(initialMode);
+  broadcastSourceMode(initialMode);
+  broadcastGSMTCAppFilter(getGSMTCAppFilter());
 
   // --- Poll GSMTC and log when the track changes ---
   let lastGSMTCKey = "";
 
   function gsmKey(d) {
-    // Only log if we actually have a "playing" track
     const isPlaying =
       (d?.status || "").toLowerCase() === "playing" ||
-      (d?.status || "").toLowerCase() === "paused" || // include paused so seek/next still logs
+      (d?.status || "").toLowerCase() === "paused" ||
       d?.position_ms != null;
 
     if (!isPlaying) return null;
 
-    const title = (d?.title || "").trim();
-    const artist = (d?.artist || "").trim();
-    const album = (d?.album || "").trim();
-    if (!title && !artist && !album) return null;
+    const title = (d?.title || "").trim().toLowerCase();
+    const artists = (Array.isArray(d?.artists) ? d.artists : [d?.artist || ""])
+      .map((a) => (a || "").trim().toLowerCase())
+      .filter(Boolean)
+      .join(","); // stable joined list
+    const album = (d?.album || "").trim().toLowerCase();
 
-    return [title, artist, album].join("||").toLowerCase();
+    if (!title && !artists && !album) return null; // <-- use artists
+    return [title, artists, album].join("||"); // <-- use artists
   }
 
   async function pollGSMTC() {
@@ -213,10 +239,14 @@ broadcastGSMTCAppFilter(getGSMTCAppFilter());
       const key = gsmKey(d);
       if (key && key !== lastGSMTCKey) {
         lastGSMTCKey = key;
+        const artistsText =
+          Array.isArray(d?.artists) && d.artists.length
+            ? d.artists.join(", ")
+            : d?.artist || "?";
         console.log(
-          `[GSMTC] Now playing: Song: ${d?.title || "?"} — Artist: ${
-            d?.artist || "?"
-          }${d?.album ? ` — Album: ${d.album}` : ""}`
+          `[GSMTC] Now playing: Song: ${
+            d?.title || "?"
+          } — Artist: ${artistsText}` + (d?.album ? ` — Album: ${d.album}` : "")
         );
       }
       // NEW: render every poll (cheap)
@@ -430,7 +460,6 @@ broadcastGSMTCAppFilter(getGSMTCAppFilter());
     const art = document.getElementById("artwork");
     if (!np || !art) return;
 
-    // default/reset
     art.style.display = "none";
     art.removeAttribute("src");
     np.textContent = "";
@@ -438,23 +467,24 @@ broadcastGSMTCAppFilter(getGSMTCAppFilter());
     const status = (d?.status || "").toLowerCase();
     const active =
       ["playing", "paused"].includes(status) || d?.position_ms != null;
-
     if (!active) {
       np.textContent = "Nothing is currently playing.";
       return;
     }
 
     const title = (d?.title || "").trim();
-    const artist = (d?.artist || "").trim();
+    const artistsText =
+      Array.isArray(d?.artists) && d.artists.length
+        ? d.artists.join(", ")
+        : (d?.artist || "").trim(); // fallback if array missing
     const album = (d?.album || "").trim();
 
-    if (title || artist || album) {
-      np.textContent = `▶ ${title}${artist ? " — " + artist : ""}${
+    if (title || artistsText || album) {
+      np.textContent = `▶ ${title}${artistsText ? " — " + artistsText : ""}${
         album ? " — " + album : ""
       }`;
     }
 
-    // Prefer the thumbnail the Rust side saves as a local file
     if (d?.artwork_path) {
       art.src = convertFileSrc(d.artwork_path);
       art.style.display = "block";

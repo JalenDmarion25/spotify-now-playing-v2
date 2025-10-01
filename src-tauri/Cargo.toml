@@ -46,3 +46,4 @@ windows = { version = "0.62.0", features = [
   "Storage_Streams",
 ] }
 futures = "0.3"
+regex = "1"
