@@ -23,6 +23,13 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 use walkdir::WalkDir;
 
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct AppSettings {
+    local_art_dir: Option<String>,
+    source_mode: Option<String>, // "spotify" | "gsmtc"
+    gsmtc_app: Option<String>,   // "spotify" | "apple" | "ytm"
+}
+
 #[derive(Default)]
 struct SpotifyStore {
     // Use Arc so we can clone a handle and drop the lock before we await (fixes the Send error)
@@ -371,9 +378,9 @@ fn settings_path(window: &tauri::Window) -> Result<PathBuf, String> {
 }
 
 fn save_local_art_dir(window: &tauri::Window, path: &Path) -> Result<(), String> {
-    let p = settings_path(window)?;
-    let json = serde_json::json!({ "local_art_dir": path.to_string_lossy() });
-    fs::write(p, serde_json::to_vec(&json).unwrap()).map_err(|e| e.to_string())
+    let mut s = read_settings(window);
+    s.local_art_dir = Some(path.to_string_lossy().to_string());
+    write_settings(window, &s)
 }
 
 fn load_local_art_dir(window: &tauri::Window) -> Option<PathBuf> {
@@ -487,6 +494,18 @@ fn start_watcher_if_needed(app: &tauri::AppHandle, state: &SharedStore) {
             }
         }
     });
+}
+
+fn read_settings(window: &tauri::Window) -> AppSettings {
+    let p = settings_path(window).ok();
+    let bytes = p.and_then(|pp| std::fs::read(pp).ok()).unwrap_or_default();
+    serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
+fn write_settings(window: &tauri::Window, s: &AppSettings) -> Result<(), String> {
+    let p = settings_path(window)?;
+    let bytes = serde_json::to_vec_pretty(s).map_err(|e| e.to_string())?;
+    std::fs::write(p, bytes).map_err(|e| e.to_string())
 }
 
 fn pick_image_url(images: &[Image], target: u32) -> Option<String> {
@@ -646,6 +665,37 @@ fn set_local_art_dir(
     });
 
     Ok(())
+}
+
+#[tauri::command]
+fn get_source_mode(window: tauri::Window) -> Option<String> {
+    read_settings(&window).source_mode
+}
+
+#[tauri::command]
+fn set_source_mode(window: tauri::Window, mode: String) -> Result<(), String> {
+    let mode = if mode == "gsmtc" { "gsmtc" } else { "spotify" }.to_string();
+    let mut s = read_settings(&window);
+    s.source_mode = Some(mode);
+    write_settings(&window, &s)
+}
+
+#[tauri::command]
+fn get_gsmtc_app(window: tauri::Window) -> Option<String> {
+    read_settings(&window).gsmtc_app
+}
+
+#[tauri::command]
+fn set_gsmtc_app(window: tauri::Window, value: String) -> Result<(), String> {
+    let val = match value.as_str() {
+        "apple" => "apple",
+        "ytm" => "ytm",
+        _ => "spotify",
+    }
+    .to_string();
+    let mut s = read_settings(&window);
+    s.gsmtc_app = Some(val);
+    write_settings(&window, &s)
 }
 
 #[tauri::command]
@@ -1409,6 +1459,10 @@ pub fn run() {
             get_local_art_dir,
             write_now_playing_assets,
             get_current_playing_gsmtc,
+            get_source_mode,
+            set_source_mode,
+            get_gsmtc_app,
+            set_gsmtc_app,
         ])
         .on_window_event(|window, event| {
             use tauri::WindowEvent;
