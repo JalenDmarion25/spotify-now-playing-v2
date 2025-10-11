@@ -839,10 +839,10 @@ async fn get_current_playing_gsmtc(window: tauri::Window) -> Result<serde_json::
                     dedup_push(&mut artists_vec, &n);
                 }
 
-                // AlbumArtist often has multiple names (labels, teams, etc.)
-                for n in parse_artists(&album_artist) {
-                    dedup_push(&mut artists_vec, &n);
-                }
+                // // AlbumArtist often has multiple names (labels, teams, etc.)
+                // for n in parse_artists(&album_artist) {
+                //     dedup_push(&mut artists_vec, &n);
+                // }
 
                 // Contributors embedded in the Title (“feat. …”, “with …”)
                 for n in parse_featured_from_title(&title) {
