@@ -53,6 +53,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // choose an option
   async function choose(value, text) {
+    try { await invoke("set_gsmtc_app", { value }); } catch {}
     dd.dataset.value = value;
     label.textContent = text;
     opts.forEach((o) =>
@@ -190,16 +191,46 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const sourceDdEl = document.getElementById("source-dd");
 
+  // Pull persisted values from Rust settings.json and seed localStorage/UI once.
+  (async function hydrateFromSettings() {
+    try {
+      const persistedMode = await invoke("get_source_mode");
+      if (persistedMode === "gsmtc" || persistedMode === "spotify") {
+        localStorage.setItem(SOURCE_KEY, persistedMode);
+      }
+    } catch {}
+    try {
+      const persistedG = await invoke("get_gsmtc_app");
+      if (
+        persistedG === "spotify" ||
+        persistedG === "apple" ||
+        persistedG === "ytm"
+      ) {
+        localStorage.setItem(GSMTC_APP_KEY, persistedG);
+        // reflect immediately in the GSMTC app dropdown label/selection
+        const val = persistedG;
+        dd.dataset.value = val;
+        label.textContent = {
+          spotify: "Spotify",
+          apple: "Apple Music",
+          ytm: "YouTube Music",
+        }[val];
+        opts.forEach((o) =>
+          o.setAttribute("aria-selected", String(o.dataset.value === val))
+        );
+      }
+    } catch {}
+  })();
+
   const sourceDD = makeDropdown(sourceDdEl, {
     get: () => getSourceMode(), // uses your SOURCE_KEY
     set: (mode) => setSourceMode(mode),
     onChange: async (mode) => {
+      try { await invoke("set_source_mode", { mode }); } catch {}
       // show/hide UI areas for each mode
       applySourceVisibility(mode);
-
       // notify other windows
       await broadcastSourceMode(mode);
-
       // keep GSMTC app filter broadcast in step, like your old select handler
       await broadcastGSMTCAppFilter(getGSMTCAppFilter());
     },
@@ -355,6 +386,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     };
     setTheme(next);
     await broadcastTheme(next);
+  });
+
+  await listen("request_source_mode", async () => {
+    await broadcastSourceMode(getSourceMode());
   });
 
   async function ensureExportDir() {
