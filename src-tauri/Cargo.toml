@@ -44,6 +44,10 @@ windows = { version = "0.62.0", features = [
   "Media",
   "Media_Control",
   "Storage_Streams",
+  "Win32_System_Com",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Accessibility",
+  "Win32_Foundation",
 ] }
 futures = "0.3"
 regex = "1"

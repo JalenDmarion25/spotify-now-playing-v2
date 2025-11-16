@@ -187,6 +187,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   const SOURCE_LABELS = {
     gsmtc: "Windows GSMTC (Recommended)",
     spotify: "Spotify API",
+    uia: "Windows UI Automation (No API)",
+
   };
 
   const sourceDdEl = document.getElementById("source-dd");

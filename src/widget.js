@@ -15,11 +15,46 @@ const GSMTC_APP_KEY = "gsmtc:app"; // "spotify" | "apple" | "ytm"
 let gsmtcAppFilter = localStorage.getItem(GSMTC_APP_KEY) || "spotify";
 let sourceMode = "spotify"; // default
 let gsmPollId = null;
+let uiaPollId = null;
 
 function setSourceMode(next) {
   sourceMode = next === "gsmtc" ? "gsmtc" : "spotify";
   localStorage.setItem(SOURCE_KEY, sourceMode);
   restartStrategy();
+}
+
+function stopUIAPoll() {
+  if (uiaPollId) {
+    clearInterval(uiaPollId);
+    uiaPollId = null;
+  }
+}
+function startUIAPoll() {
+  stopUIAPoll();
+  const poll = async () => {
+    try {
+      const d = await window.__TAURI__.core.invoke("get_current_playing_uia");
+      // shape: { is_playing, track_name, artists[], album:null, artwork_path?, status }
+      if (d) {
+        render({
+          is_playing: !!d.is_playing,
+          track_name: d.track_name || "",
+          artists: Array.isArray(d.artists)
+            ? d.artists
+            : d.artists
+            ? [d.artists]
+            : [],
+          album: d.album || null,
+          artwork_url: null,
+          artwork_path: d.artwork_path || null,
+        });
+      }
+    } catch (e) {
+      // quiet
+    }
+  };
+  poll();
+  uiaPollId = setInterval(poll, 1500);
 }
 
 function stopGSMTCPoll() {
@@ -67,12 +102,16 @@ function stopSpotifyListener() {
 }
 
 function restartStrategy() {
+  stopGSMTCPoll();
+  stopSpotifyListener();
+  stopUIAPoll();
+
   if (sourceMode === "gsmtc") {
-    stopSpotifyListener();
     startGSMTCPoll();
-  } else {
-    stopGSMTCPoll();
+  } else if (sourceMode === "spotify") {
     startSpotifyListener();
+  } else if (sourceMode === "uia") {
+    startUIAPoll();
   }
 }
 
@@ -82,8 +121,7 @@ function matchesSelectedApp(d) {
 
   // Heuristics for common AUMIDs on Windows:
   // Spotify (Store + desktop builds)
-  const isSpotify =
-    id.includes("spotify");
+  const isSpotify = id.includes("spotify");
 
   // Apple Music candidates:
   const isApple =
@@ -104,7 +142,8 @@ function matchesSelectedApp(d) {
   // so regular browser tabs won't be picked up.)
   const isYouTubeMusicPWAish =
     isYouTubeMusic ||
-    ((id.includes("pwa") || id.includes("pwalauncher")) && id.includes("youtube"));
+    ((id.includes("pwa") || id.includes("pwalauncher")) &&
+      id.includes("youtube"));
 
   switch (gsmtcAppFilter) {
     case "spotify":
@@ -148,7 +187,7 @@ function renderGSMTC(d) {
   render({
     is_playing: true,
     track_name,
-    artists,            // ← now an array when available
+    artists, // ← now an array when available
     album,
     artwork_url: null,
     artwork_path: d?.artwork_path || null,
