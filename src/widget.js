@@ -12,7 +12,12 @@ let lastKey = "";
 const THEME_KEYS = { bg: "theme:bg", title: "theme:title", meta: "theme:meta" };
 const SOURCE_KEY = "source:mode";
 const GSMTC_APP_KEY = "gsmtc:app"; // "spotify" | "apple" | "ytm"
-let gsmtcAppFilter = localStorage.getItem(GSMTC_APP_KEY) || "spotify";
+let gsmtcAppFilter = (() => {
+  const raw = localStorage.getItem(GSMTC_APP_KEY);
+  if (raw === "apple" || raw === "ytm") return raw;
+  localStorage.setItem(GSMTC_APP_KEY, "apple");
+  return "apple";
+})();
 let sourceMode = "spotify"; // default
 let gsmPollId = null;
 let uiaPollId = null;
@@ -119,11 +124,6 @@ function matchesSelectedApp(d) {
   const idRaw = d?.source_app_id || "";
   const id = idRaw.toLowerCase();
 
-  // Heuristics for common AUMIDs on Windows:
-  // Spotify (Store + desktop builds)
-  const isSpotify = id.includes("spotify");
-
-  // Apple Music candidates:
   const isApple =
     id.includes("applemusicwin11") ||
     id.includes("appleinc.applemusic") ||
@@ -131,28 +131,23 @@ function matchesSelectedApp(d) {
     id.includes("appleinc.itunes") ||
     id.includes("itunes");
 
-  // YouTube Music candidates:
   const isYouTubeMusic =
     id.includes("youtubemusic") ||
     id.includes("youtube_music") ||
     (id.includes("google") && id.includes("music") && id.includes("youtube"));
 
-  // Optional lenient: catch some PWA launcher shapes
-  // (This still requires the AUMID to mention YouTube Music somewhere,
-  // so regular browser tabs won't be picked up.)
   const isYouTubeMusicPWAish =
     isYouTubeMusic ||
     ((id.includes("pwa") || id.includes("pwalauncher")) &&
       id.includes("youtube"));
 
   switch (gsmtcAppFilter) {
-    case "spotify":
-      return isSpotify;
     case "apple":
       return isApple;
     case "ytm":
       return isYouTubeMusicPWAish;
     default:
+      // If somehow "spotify" leaked in from old storage, treat it as "no match"
       return false;
   }
 }
@@ -406,9 +401,13 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   await event.listen("gsmtc_app_filter_update", (evt) => {
     const v = evt?.payload?.value;
-    if (v) {
+    if (v === "apple" || v === "ytm") {
       gsmtcAppFilter = v;
       localStorage.setItem(GSMTC_APP_KEY, v);
+    } else if (v === "spotify") {
+      // migrate to apple instead of allowing GSMTC+Spotify
+      gsmtcAppFilter = "apple";
+      localStorage.setItem(GSMTC_APP_KEY, "apple");
     }
   });
 

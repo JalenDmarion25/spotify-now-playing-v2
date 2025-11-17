@@ -23,7 +23,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   const opts = Array.from(menu.querySelectorAll('[role="option"]'));
 
   // init from storage (default spotify)
-  const stored = localStorage.getItem(GSMTC_APP_KEY) || "spotify";
+  const storedRaw = localStorage.getItem(GSMTC_APP_KEY);
+  const stored =
+    storedRaw === "apple" || storedRaw === "ytm" ? storedRaw : "apple";
+  dd.dataset.value = stored;
+  label.textContent =
+    { apple: "Apple Music", ytm: "YouTube Music" }[stored] || "Apple Music";
+  opts.forEach((o) =>
+    o.setAttribute("aria-selected", String(o.dataset.value === stored))
+  );
   dd.dataset.value = stored;
   label.textContent =
     { spotify: "Spotify", apple: "Apple Music", ytm: "YouTube Music" }[
@@ -53,7 +61,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // choose an option
   async function choose(value, text) {
-    try { await invoke("set_gsmtc_app", { value }); } catch {}
+    try {
+      await invoke("set_gsmtc_app", { value });
+    } catch {}
     dd.dataset.value = value;
     label.textContent = text;
     opts.forEach((o) =>
@@ -188,7 +198,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     gsmtc: "Windows GSMTC (Recommended)",
     spotify: "Spotify API",
     uia: "Windows UI Automation (No API)",
-
   };
 
   const sourceDdEl = document.getElementById("source-dd");
@@ -197,28 +206,35 @@ document.addEventListener("DOMContentLoaded", async () => {
   (async function hydrateFromSettings() {
     try {
       const persistedMode = await invoke("get_source_mode");
-      if (persistedMode === "gsmtc" || persistedMode === "spotify") {
+      if (
+        persistedMode === "gsmtc" ||
+        persistedMode === "spotify" ||
+        persistedMode === "uia"
+      ) {
         localStorage.setItem(SOURCE_KEY, persistedMode);
       }
     } catch {}
+
     try {
       const persistedG = await invoke("get_gsmtc_app");
-      if (
-        persistedG === "spotify" ||
-        persistedG === "apple" ||
-        persistedG === "ytm"
-      ) {
+      if (persistedG === "apple" || persistedG === "ytm") {
         localStorage.setItem(GSMTC_APP_KEY, persistedG);
-        // reflect immediately in the GSMTC app dropdown label/selection
         const val = persistedG;
         dd.dataset.value = val;
         label.textContent = {
-          spotify: "Spotify",
           apple: "Apple Music",
           ytm: "YouTube Music",
         }[val];
         opts.forEach((o) =>
           o.setAttribute("aria-selected", String(o.dataset.value === val))
+        );
+      } else if (persistedG === "spotify") {
+        // For safety: migrate old "spotify" to "apple"
+        localStorage.setItem(GSMTC_APP_KEY, "apple");
+        dd.dataset.value = "apple";
+        label.textContent = "Apple Music";
+        opts.forEach((o) =>
+          o.setAttribute("aria-selected", String(o.dataset.value === "apple"))
         );
       }
     } catch {}
@@ -228,7 +244,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     get: () => getSourceMode(), // uses your SOURCE_KEY
     set: (mode) => setSourceMode(mode),
     onChange: async (mode) => {
-      try { await invoke("set_source_mode", { mode }); } catch {}
+      try {
+        await invoke("set_source_mode", { mode });
+      } catch {}
       // show/hide UI areas for each mode
       applySourceVisibility(mode);
       // notify other windows
@@ -308,6 +326,50 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (exportToggle) exportToggle.checked = exportEnabled;
   let exportDir = null; // cached output directory
   let lastExportKey = ""; // de-dupe writes per track
+  if (exportEnabled) {
+    lastExportKey = "";
+    try {
+      const mode = getSourceMode();
+      let d = null;
+
+      if (mode === "spotify") {
+        // Spotify API
+        d = await invoke("get_current_playing");
+        await maybeExport(d);
+      } else if (mode === "gsmtc") {
+        // Windows GSMTC
+        const g = await invoke("get_current_playing_gsmtc");
+        // normalize GSMTC payload into the shape maybeExport expects
+        const status = (g?.status || "").toLowerCase();
+        const active =
+          ["playing", "paused"].includes(status) || g?.position_ms != null;
+        const title = (g?.title || "").trim();
+        const artistsText =
+          Array.isArray(g?.artists) && g.artists.length
+            ? g.artists.join(", ")
+            : (g?.artist || "").trim();
+        const album = (g?.album || "").trim();
+
+        const unified = {
+          is_playing: active,
+          track_name: title,
+          artists: artistsText
+            ? artistsText.split(",").map((s) => s.trim()).filter(Boolean)
+            : [],
+          album: album || null,
+          artwork_url: null,
+          artwork_path: g?.artwork_path || null,
+        };
+        await maybeExport(unified);
+      } else if (mode === "uia") {
+        // UI Automation path already returns Spotify-like shape
+        const u = await invoke("get_current_playing_uia");
+        await maybeExport(u);
+      }
+    } catch (e) {
+      console.error("Initial export on boot failed:", e);
+    }
+  }
 
   const showLocalDir = (dir) => {
     if (!localDirEl) return;
@@ -317,16 +379,25 @@ document.addEventListener("DOMContentLoaded", async () => {
   };
 
   function applySourceVisibility(mode) {
+    const isSpotifyApi = mode === "spotify";
     const isGsmtc = mode === "gsmtc";
-    if (connectForm) connectForm.style.display = isGsmtc ? "none" : "";
-    if (chooseBtn) chooseBtn.style.display = isGsmtc ? "none" : "";
-    if (statusEl) statusEl.style.display = isGsmtc ? "none" : "";
-    if (localDirEl) localDirEl.style.display = isGsmtc ? "none" : "";
+
+    // These only make sense for Spotify API
+    if (connectForm) connectForm.style.display = isSpotifyApi ? "" : "none";
+    if (chooseBtn) chooseBtn.style.display = isSpotifyApi ? "" : "none";
+    if (statusEl) statusEl.style.display = isSpotifyApi ? "" : "none";
+    if (localDirEl) localDirEl.style.display = isSpotifyApi ? "" : "none";
+
+    // GSMTC app filter row only when GSMTC is selected
     if (gsmtcFilterRow) gsmtcFilterRow.style.display = isGsmtc ? "" : "none";
   }
 
   function getGSMTCAppFilter() {
-    return localStorage.getItem(GSMTC_APP_KEY) || "spotify";
+    const raw = localStorage.getItem(GSMTC_APP_KEY);
+    if (raw === "apple" || raw === "ytm") return raw;
+    // migrate anything else (including old "spotify") to apple
+    localStorage.setItem(GSMTC_APP_KEY, "apple");
+    return "apple";
   }
 
   async function broadcastGSMTCAppFilter(value = getGSMTCAppFilter()) {

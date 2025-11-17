@@ -49,6 +49,9 @@
         >
           Windows GSMTC (Recommended)
         </span>
+        <span role="option" data-value="uia" aria-selected="false" tabindex="0">
+          Windows UI Automation (Spotify Only)
+        </span>
         <span
           role="option"
           data-value="spotify"
@@ -57,9 +60,6 @@
         >
           Spotify API
         </span>
-        <span role="option" data-value="uia" aria-selected="false" tabindex="0">
-          Windows UI Automation (No API)
-        </span>
       </div>
     </div>
 
@@ -67,7 +67,7 @@
       <label for="gsmtc-dd-btn">Music Application:</label>
 
       <!-- Custom dropdown -->
-      <div class="dd" id="gsmtc-dd" data-value="spotify">
+      <div class="dd" id="gsmtc-dd" data-value="apple">
         <button
           id="gsmtc-dd-btn"
           class="dd-toggle"
@@ -75,7 +75,7 @@
           aria-haspopup="listbox"
           aria-expanded="false"
         >
-          <span class="dd-label" id="gsmtc-dd-label">Spotify</span>
+          <span class="dd-label" id="gsmtc-dd-label">Apple Music</span>
           <svg width="12" height="8" viewBox="0 0 12 8" aria-hidden="true">
             <path
               d="M1 1l5 5 5-5"
@@ -96,15 +96,8 @@
         >
           <span
             role="option"
-            data-value="spotify"
-            aria-selected="true"
-            tabindex="0"
-            >Spotify</span
-          >
-          <span
-            role="option"
             data-value="apple"
-            aria-selected="false"
+            aria-selected="true"
             tabindex="0"
             >Apple Music</span
           >
@@ -146,9 +139,9 @@
           justify-content: center;
         "
       >
-        <input id="export-toggle" type="checkbox" />
-        Export Track (API Only)
-      </label>
+        <!-- <input id="export-toggle" type="checkbox" />
+        Export Track
+      </label> -->
     </div>
 
     <p id="status"></p>

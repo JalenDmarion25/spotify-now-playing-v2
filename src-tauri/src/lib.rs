@@ -771,9 +771,7 @@ fn get_current_playing_uia(window: tauri::Window) -> Result<serde_json::Value, S
     Ok(payload)
 }
 
-fn get_gsmtc_status_and_art(
-    window: &tauri::Window,
-) -> Result<(String, Option<String>), String> {
+fn get_gsmtc_status_and_art(window: &tauri::Window) -> Result<(String, Option<String>), String> {
     use futures::executor::block_on;
     use windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
     use windows::Storage::Streams::{DataReader, InputStreamOptions};
@@ -784,7 +782,9 @@ fn get_gsmtc_status_and_art(
             .await
             .map_err(|e| format!("GSMTC await: {e:?}"))?;
 
-        let session = mgr.GetCurrentSession().map_err(|_| "No session".to_string())?;
+        let session = mgr
+            .GetCurrentSession()
+            .map_err(|_| "No session".to_string())?;
         let status = session
             .GetPlaybackInfo()
             .ok()
@@ -799,11 +799,8 @@ fn get_gsmtc_status_and_art(
                 if let Ok(th) = props.Thumbnail() {
                     if let Ok(op) = th.OpenReadAsync() {
                         if let Ok(stream) = op.await {
-                            let input = stream
-                                .GetInputStreamAt(0)
-                                .map_err(|e| format!("{e:?}"))?;
-                            let size =
-                                (stream.Size().unwrap_or(0).min(u64::from(u32::MAX))) as u32;
+                            let input = stream.GetInputStreamAt(0).map_err(|e| format!("{e:?}"))?;
+                            let size = (stream.Size().unwrap_or(0).min(u64::from(u32::MAX))) as u32;
                             if size > 0 {
                                 let reader = DataReader::CreateDataReader(&input)
                                     .map_err(|e| format!("{e:?}"))?;
@@ -844,7 +841,6 @@ fn get_gsmtc_status_and_art(
         Ok((status, artwork_path))
     })
 }
-
 
 #[tauri::command]
 async fn write_now_playing_assets(
@@ -955,9 +951,10 @@ fn set_gsmtc_app(window: tauri::Window, value: String) -> Result<(), String> {
     let val = match value.as_str() {
         "apple" => "apple",
         "ytm" => "ytm",
-        _ => "spotify",
+        _ => "apple", // fallback, no more "spotify" here
     }
     .to_string();
+
     let mut s = read_settings(&window);
     s.gsmtc_app = Some(val);
     write_settings(&window, &s)
