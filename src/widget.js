@@ -23,7 +23,13 @@ let gsmPollId = null;
 let uiaPollId = null;
 
 function setSourceMode(next) {
-  sourceMode = next === "gsmtc" ? "gsmtc" : "spotify";
+  // Allow all three: "spotify", "gsmtc", "uia"
+  if (next === "gsmtc" || next === "uia" || next === "spotify") {
+    sourceMode = next;
+  } else {
+    sourceMode = "spotify"; // safe fallback
+  }
+
   localStorage.setItem(SOURCE_KEY, sourceMode);
   restartStrategy();
 }

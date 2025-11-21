@@ -354,7 +354,10 @@ document.addEventListener("DOMContentLoaded", async () => {
           is_playing: active,
           track_name: title,
           artists: artistsText
-            ? artistsText.split(",").map((s) => s.trim()).filter(Boolean)
+            ? artistsText
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean)
             : [],
           album: album || null,
           artwork_url: null,

@@ -26,8 +26,8 @@ use walkdir::WalkDir;
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct AppSettings {
     local_art_dir: Option<String>,
-    source_mode: Option<String>, // "spotify" | "gsmtc"
-    gsmtc_app: Option<String>,   // "spotify" | "apple" | "ytm"
+    source_mode: Option<String>, // "spotify" | "gsmtc" | "uia"
+    gsmtc_app: Option<String>,   // "apple" | "ytm"
 }
 
 #[derive(Default)]
@@ -935,7 +935,14 @@ fn get_source_mode(window: tauri::Window) -> Option<String> {
 
 #[tauri::command]
 fn set_source_mode(window: tauri::Window, mode: String) -> Result<(), String> {
-    let mode = if mode == "gsmtc" { "gsmtc" } else { "spotify" }.to_string();
+    // accept 3 modes from the frontend
+    let mode = match mode.as_str() {
+        "gsmtc" => "gsmtc",
+        "uia" => "uia",
+        _ => "spotify",
+    }
+    .to_string();
+
     let mut s = read_settings(&window);
     s.source_mode = Some(mode);
     write_settings(&window, &s)
