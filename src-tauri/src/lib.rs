@@ -18,7 +18,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tauri::{Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, State};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use walkdir::WalkDir;
@@ -413,6 +413,12 @@ fn settings_path_from_handle(app: &tauri::AppHandle) -> Result<PathBuf, String> 
     Ok(dir.join("settings.json"))
 }
 
+fn read_settings_from_handle(app: &tauri::AppHandle) -> AppSettings {
+    let p = settings_path_from_handle(app).ok();
+    let bytes = p.and_then(|pp| std::fs::read(pp).ok()).unwrap_or_default();
+    serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
 fn load_local_art_dir_from_handle(app: &tauri::AppHandle) -> Option<PathBuf> {
     let p = settings_path_from_handle(app).ok()?;
     let bytes = fs::read(p).ok()?;
@@ -687,10 +693,23 @@ fn get_source_mode(window: tauri::Window) -> Option<String> {
 
 #[tauri::command]
 fn set_source_mode(window: tauri::Window, mode: String) -> Result<(), String> {
-    let mode = if mode == "gsmtc" { "gsmtc" } else { "spotify" }.to_string();
+    // 1) Persist to settings.json (same as your other getters/setters)
     let mut s = read_settings(&window);
-    s.source_mode = Some(mode);
-    write_settings(&window, &s)
+    s.source_mode = Some(mode.clone());
+    write_settings(&window, &s)?;
+
+    // 2) Resize the main window based on the mode
+    let app = window.app_handle();
+    if let Some(win) = app.get_webview_window("main") {
+        let height = if mode == "gsmtc" { 400.0 } else { 600.0 };
+        let size = tauri::Size::Logical(LogicalSize::new(350.0, height));
+
+        if let Err(e) = win.set_size(size) {
+            eprintln!("Failed to resize main window: {e}");
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -967,14 +986,22 @@ async fn get_current_playing_gsmtc(window: tauri::Window) -> Result<serde_json::
                 let payload = serde_json::json!({
                     "status": status,
                     "title": title,
+                    "subtitle": subtitle,
                     "album": album,
                     "artist": artist,
+                    "album_artist": album_artist,
                     "artists": artists_vec,
                     "position_ms": position_ms,
                     "end_time_ms": end_time_ms,
                     "last_updated": last_updated_iso,
                     "source_app_id": session.SourceAppUserModelId().ok().map(|s| s.to_string()),
-                    "artwork_path": artwork_path
+                    "artwork_path": artwork_path,
+                    "raw": {                      // optional debug-only block
+                        "title": title,
+                        "subtitle": subtitle,
+                        "artist": artist,
+                        "album_artist": album_artist,
+                    }
                 });
 
                 Ok::<(serde_json::Value, Option<String>), String>((
@@ -1464,6 +1491,15 @@ pub fn run() {
                     g.local_index = idx;
                     g.art_cache.clear();
                 });
+            }
+
+            let settings = read_settings_from_handle(&app.app_handle());
+            if let Some(mode) = settings.source_mode.as_deref() {
+                if let Some(main) = app.get_webview_window("main") {
+                    let height = if mode == "gsmtc" { 400.0 } else { 600.0 };
+                    let size = tauri::Size::Logical(LogicalSize::new(350.0, height));
+                    let _ = main.set_size(size);
+                }
             }
 
             Ok(())

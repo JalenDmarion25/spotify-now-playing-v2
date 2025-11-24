@@ -131,15 +131,39 @@ select:active {
   -webkit-app-region: no-drag;
 }
 
-#dd-source-menu{
-    top: 135px;
-    left: 23px;
+#dd-source-menu {
+  top: 135px;
+  left: 23px;
 }
 
-#gsmtc-dd-menu{
+#gsmtc-dd-menu {
   left: 98px;
   right: 0;
   top: 208px;
+}
+
+/* When in GSMTC mode */
+:root[data-source-mode="gsmtc"] #dd-source-menu {
+  top: 120px;
+  left: 23px;
+}
+
+:root[data-source-mode="gsmtc"] #gsmtc-dd-menu {
+  top: 190px;
+  left: 98px;
+  right: 0;
+}
+
+/* When in Spotify API mode */
+:root[data-source-mode="spotify"] #dd-source-menu {
+  top: 135px;
+  left: 23px;
+}
+
+:root[data-source-mode="spotify"] #gsmtc-dd-menu {
+  top: 208px;
+  left: 98px;
+  right: 0;
 }
 
 /* Stack options vertically and center them */

@@ -272,19 +272,26 @@ document.addEventListener("DOMContentLoaded", async () => {
     try {
       const d = await window.__TAURI__.core.invoke("get_current_playing_gsmtc");
       const key = gsmKey(d);
+
       if (key && key !== lastGSMTCKey) {
         lastGSMTCKey = key;
+
+        // ✅ GSMTC View log – same frequency as the regular GSMTC log
+        console.log("[GSMTC View]", d);
+
         const artistsText =
           Array.isArray(d?.artists) && d.artists.length
             ? d.artists.join(", ")
             : d?.artist || "?";
+
         console.log(
           `[GSMTC] Now playing: Song: ${
             d?.title || "?"
           } — Artist: ${artistsText}` + (d?.album ? ` — Album: ${d.album}` : "")
         );
       }
-      // NEW: render every poll (cheap)
+
+      // Render every poll (cheap)
       renderNowPlayingGSMTC(d);
     } catch (e) {
       // optional: quiet
@@ -325,6 +332,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (statusEl) statusEl.style.display = isGsmtc ? "none" : "";
     if (localDirEl) localDirEl.style.display = isGsmtc ? "none" : "";
     if (gsmtcFilterRow) gsmtcFilterRow.style.display = isGsmtc ? "" : "none";
+
+    document.documentElement.setAttribute("data-source-mode", mode);
   }
 
   function getGSMTCAppFilter() {
@@ -568,7 +577,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     renderNowPlaying(d);
     await maybeExport(d); // <-- auto export on every change while checked
   });
-  
+
   await listen("auth_lost", async () => {
     try {
       const ok = await invoke("restore_spotify");
