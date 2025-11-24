@@ -1,7 +1,7 @@
 const { invoke, convertFileSrc } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const { WebviewWindow, getAll } = window.__TAURI__.webviewWindow;
-const { open } = window.__TAURI__.dialog;
+const { open: openDialog } = window.__TAURI__.dialog;
 
 document.addEventListener("DOMContentLoaded", async () => {
   const statusEl = document.getElementById("status");
@@ -53,7 +53,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // choose an option
   async function choose(value, text) {
-    try { await invoke("set_gsmtc_app", { value }); } catch {}
+    try {
+      await invoke("set_gsmtc_app", { value });
+    } catch {}
     dd.dataset.value = value;
     label.textContent = text;
     opts.forEach((o) =>
@@ -226,7 +228,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     get: () => getSourceMode(), // uses your SOURCE_KEY
     set: (mode) => setSourceMode(mode),
     onChange: async (mode) => {
-      try { await invoke("set_source_mode", { mode }); } catch {}
+      try {
+        await invoke("set_source_mode", { mode });
+      } catch {}
       // show/hide UI areas for each mode
       applySourceVisibility(mode);
       // notify other windows
@@ -395,7 +399,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   async function ensureExportDir() {
     if (exportDir) return exportDir;
 
-    // Prefer the stored folder (you already save this via "Choose Music Folder")
+    // Prefer the stored folder ...
     try {
       const saved = await invoke("get_local_art_dir");
       if (saved) {
@@ -405,7 +409,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     } catch {}
 
     // If none is set, prompt once and store it
-    const dir = await open({ directory: true, multiple: false });
+    const dir = await openDialog({ directory: true, multiple: false });
     if (!dir) throw new Error("No export folder selected.");
     await invoke("set_local_art_dir", { path: dir });
     showLocalDir(dir);
@@ -581,15 +585,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   // choose local folder (requires tauri-plugin-dialog on the Rust side)
   if (chooseBtn) {
     chooseBtn.addEventListener("click", async () => {
-      const dir = await open({ directory: true, multiple: false });
+      const dir = await openDialog({ directory: true, multiple: false });
       if (dir) {
         await invoke("set_local_art_dir", { path: dir });
         showLocalDir(dir);
-        // Refresh now playing so the new folder is used right away
         try {
           const d = await invoke("get_current_playing");
-          renderNowPlaying?.(d); // in main window
-          // In the widget, the poll + event will also update, but you can do the same call there if needed
+          renderNowPlaying?.(d);
         } catch {}
       }
     });
