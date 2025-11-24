@@ -26,8 +26,8 @@ use walkdir::WalkDir;
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct AppSettings {
     local_art_dir: Option<String>,
-    source_mode: Option<String>, // "spotify" | "gsmtc" | "uia"
-    gsmtc_app: Option<String>,   // "apple" | "ytm"
+    source_mode: Option<String>, // "spotify" | "gsmtc"
+    gsmtc_app: Option<String>,   // "spotify" | "apple" | "ytm"
 }
 
 #[derive(Default)]
@@ -140,7 +140,7 @@ fn clean_person(name: &str) -> String {
         '<', '>', '（', '）', '「', '」', '『', '』', '【', '】', '《', '》', '"', '“', '”', '‘',
         '’', '\'', '–', '—', '−', '-', '•', '●',
     ];
-    let s = name.trim_matches(TRIM);
+    let mut s = name.trim_matches(TRIM);
     // collapse inner whitespace
     let collapsed = s.split_whitespace().collect::<Vec<_>>().join(" ");
     collapsed
@@ -582,267 +582,6 @@ fn clear_token_cache(window: &tauri::Window) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn get_current_playing_uia(window: tauri::Window) -> Result<serde_json::Value, String> {
-    use windows::core::w;
-    use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
-        COINIT_APARTMENTTHREADED,
-    };
-    use windows::Win32::UI::Accessibility::{
-        CUIAutomation, IUIAutomation, IUIAutomationElement, TreeScope_Subtree,
-        UIA_TextControlTypeId,
-    };
-    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, IsWindow};
-
-    // Init COM for this thread
-    unsafe {
-        CoInitializeEx(None, COINIT_APARTMENTTHREADED)
-            .ok()
-            .map_err(|e| format!("CoInitializeEx failed: {e:?}"))?;
-    }
-    let ui_result: Result<serde_json::Value, String> = (|| {
-        // 1) Find Spotify main window
-        let hwnd = unsafe { FindWindowW(w!("Chrome_WidgetWin_0"), w!("Spotify")) };
-        let hwnd = match hwnd {
-            Ok(h) => h,
-            Err(_) => {
-                // Treat "not found" / error as "nothing playing"
-                return Ok(serde_json::json!({ "is_playing": false }));
-            }
-        };
-
-        if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
-            return Ok(serde_json::json!({ "is_playing": false }));
-        }
-
-        // 2) UIA root element from that HWND
-        let uia: IUIAutomation = unsafe {
-            CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
-                .map_err(|e| format!("CoCreateInstance: {e:?}"))?
-        };
-        let root: IUIAutomationElement = unsafe {
-            uia.ElementFromHandle(hwnd)
-                .map_err(|e| format!("ElementFromHandle: {e:?}"))?
-        };
-
-        // 3) Collect all Text elements' names
-        fn collect_text(
-            uia: &IUIAutomation,
-            el: &IUIAutomationElement,
-        ) -> Result<Vec<String>, String> {
-            // Match everything, then filter by ControlType == Text
-            let true_cond = unsafe { uia.CreateTrueCondition() }
-                .map_err(|e| format!("CreateTrueCondition: {e:?}"))?;
-
-            let list = unsafe { el.FindAll(TreeScope_Subtree, &true_cond) }
-                .map_err(|e| format!("FindAll: {e:?}"))?;
-
-            let mut out = Vec::new();
-            let count = unsafe { list.Length() }.map_err(|e| format!("Length: {e:?}"))?;
-            for i in 0..count {
-                let item =
-                    unsafe { list.GetElement(i) }.map_err(|e| format!("GetElement: {e:?}"))?;
-
-                let ct = unsafe { item.CurrentControlType() }
-                    .map_err(|e| format!("CurrentControlType: {e:?}"))?;
-
-                if ct != UIA_TextControlTypeId {
-                    continue;
-                }
-
-                if let Ok(name) = unsafe { item.CurrentName() } {
-                    let s = name.to_string();
-                    if !s.trim().is_empty() {
-                        out.push(s);
-                    }
-                }
-            }
-            Ok(out)
-        }
-
-        fn looks_like_artists_block(s: &str) -> bool {
-            let l = s.to_ascii_lowercase();
-            l.contains(',')
-                || l.contains('&')
-                || l.contains('＆')
-                || l.contains(" feat")
-                || l.contains(" ft")
-                || l.contains(" with ")
-                || l.contains(" vs ")
-                || l.contains(" x ")
-                || l.contains('×')
-                || l.contains(" + ")
-                || l.contains('＋')
-        }
-
-        fn split_artists(raw: &str) -> Vec<String> {
-            let re = regex::Regex::new(
-                r#"(?ix)
-                \s*
-                (?:
-                  , | ， | ; | & | ＆ | / | ／ | \| | ｜ | × | ・ | ･ |
-                  \bfeat\.?\b | \bfeaturing\.?\b | \bft\.?\b | \bwith\b | \bvs\.?\b |
-                  \s+x\s+ | \s+ｘ\s+ | \s+\+\s+ | \s+＋\s+
-                )
-                \s*"#,
-            )
-            .unwrap();
-            let mut out = Vec::new();
-            for part in re.split(raw) {
-                let t = part.trim();
-                if !t.is_empty() && !out.iter().any(|e: &String| e.eq_ignore_ascii_case(t)) {
-                    out.push(t.to_string());
-                }
-            }
-            if out.is_empty() && !raw.trim().is_empty() {
-                out.push(raw.trim().to_string());
-            }
-            out
-        }
-
-        let texts = collect_text(&uia, &root)?;
-        if texts.is_empty() {
-            return Ok(serde_json::json!({ "is_playing": false }));
-        }
-
-        // Choose artist/title lines
-        let mut candidate_title = String::new();
-        let mut candidate_artist = String::new();
-
-        for t in &texts {
-            let s = t.trim();
-            if looks_like_artists_block(s) {
-                if s.len() > candidate_artist.len() {
-                    candidate_artist = s.to_string();
-                }
-            } else if s.len() > candidate_title.len() {
-                candidate_title = s.to_string();
-            }
-        }
-
-        if candidate_title.is_empty() {
-            candidate_title = texts
-                .iter()
-                .max_by_key(|s| s.len())
-                .cloned()
-                .unwrap_or_default();
-        }
-
-        if candidate_artist.is_empty() {
-            if let Some(other) = texts.iter().find(|s| s.trim() != candidate_title.trim()) {
-                candidate_artist = other.trim().to_string();
-            }
-        }
-
-        let artists = split_artists(&candidate_artist);
-
-        let payload = serde_json::json!({
-            "is_playing": !(candidate_title.trim().is_empty() && artists.is_empty()),
-            "track_name": candidate_title,
-            "artists": artists,
-            "album": null,
-            "artwork_url": null,
-            "artwork_path": null,
-            "status": "Unknown",
-            "source": "uia",
-        });
-
-        Ok(payload)
-    })();
-
-    // Always uninitialize COM on this thread
-    unsafe {
-        CoUninitialize();
-    }
-
-    // If UIA failed, just return the error
-    let mut payload = ui_result?;
-
-    // Augment with GSMTC info synchronously so this command stays `Send`
-    if let Ok((status, art)) = get_gsmtc_status_and_art(&window) {
-        if let Some(obj) = payload.as_object_mut() {
-            obj.insert("status".into(), status.into());
-            if let Some(path) = art {
-                obj.insert("artwork_path".into(), path.into());
-            }
-        }
-    }
-
-    Ok(payload)
-}
-
-fn get_gsmtc_status_and_art(window: &tauri::Window) -> Result<(String, Option<String>), String> {
-    use futures::executor::block_on;
-    use windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
-    use windows::Storage::Streams::{DataReader, InputStreamOptions};
-
-    block_on(async {
-        let mgr = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
-            .map_err(|e| format!("GSMTC RequestAsync: {e:?}"))?
-            .await
-            .map_err(|e| format!("GSMTC await: {e:?}"))?;
-
-        let session = mgr
-            .GetCurrentSession()
-            .map_err(|_| "No session".to_string())?;
-        let status = session
-            .GetPlaybackInfo()
-            .ok()
-            .and_then(|i| i.PlaybackStatus().ok())
-            .map(|s| format!("{:?}", s))
-            .unwrap_or_else(|| "Unknown".to_string());
-
-        // Try to pull thumbnail → cache file (same logic style you already use)
-        let mut artwork_path: Option<String> = None;
-        if let Ok(props) = session.TryGetMediaPropertiesAsync() {
-            if let Ok(props) = props.await {
-                if let Ok(th) = props.Thumbnail() {
-                    if let Ok(op) = th.OpenReadAsync() {
-                        if let Ok(stream) = op.await {
-                            let input = stream.GetInputStreamAt(0).map_err(|e| format!("{e:?}"))?;
-                            let size = (stream.Size().unwrap_or(0).min(u64::from(u32::MAX))) as u32;
-                            if size > 0 {
-                                let reader = DataReader::CreateDataReader(&input)
-                                    .map_err(|e| format!("{e:?}"))?;
-                                reader
-                                    .SetInputStreamOptions(InputStreamOptions::ReadAhead)
-                                    .map_err(|e| format!("{e:?}"))?;
-                                reader
-                                    .LoadAsync(size)
-                                    .map_err(|e| format!("{e:?}"))?
-                                    .await
-                                    .map_err(|e| format!("{e:?}"))?;
-
-                                let mut bytes = vec![0u8; size as usize];
-                                reader
-                                    .ReadBytes(bytes.as_mut_slice())
-                                    .map_err(|e| format!("{e:?}"))?;
-
-                                let cache_dir = window
-                                    .app_handle()
-                                    .path()
-                                    .app_local_data_dir()
-                                    .map_err(|e| format!("{e}"))?
-                                    .join("artcache");
-                                let _ = std::fs::create_dir_all(&cache_dir);
-                                let out = cache_dir.join("uia_gsmtc_thumb.png");
-
-                                if let Ok(img) = image::load_from_memory(&bytes) {
-                                    let _ = img.save(&out);
-                                    artwork_path = Some(out.to_string_lossy().to_string());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok((status, artwork_path))
-    })
-}
-
-#[tauri::command]
 async fn write_now_playing_assets(
     _window: tauri::Window,
     payload: ExportPayload,
@@ -935,14 +674,7 @@ fn get_source_mode(window: tauri::Window) -> Option<String> {
 
 #[tauri::command]
 fn set_source_mode(window: tauri::Window, mode: String) -> Result<(), String> {
-    // accept 3 modes from the frontend
-    let mode = match mode.as_str() {
-        "gsmtc" => "gsmtc",
-        "uia" => "uia",
-        _ => "spotify",
-    }
-    .to_string();
-
+    let mode = if mode == "gsmtc" { "gsmtc" } else { "spotify" }.to_string();
     let mut s = read_settings(&window);
     s.source_mode = Some(mode);
     write_settings(&window, &s)
@@ -958,10 +690,9 @@ fn set_gsmtc_app(window: tauri::Window, value: String) -> Result<(), String> {
     let val = match value.as_str() {
         "apple" => "apple",
         "ytm" => "ytm",
-        _ => "apple", // fallback, no more "spotify" here
+        _ => "spotify",
     }
     .to_string();
-
     let mut s = read_settings(&window);
     s.gsmtc_app = Some(val);
     write_settings(&window, &s)
@@ -1089,7 +820,7 @@ async fn get_current_playing_gsmtc(window: tauri::Window) -> Result<serde_json::
                 let title = props.Title().unwrap_or_default().to_string();
                 let album = props.AlbumTitle().unwrap_or_default().to_string();
                 let artist = props.Artist().unwrap_or_default().to_string();
-                let _album_artist = props.AlbumArtist().unwrap_or_default().to_string();
+                let album_artist = props.AlbumArtist().unwrap_or_default().to_string();
                 let subtitle = props.Subtitle().unwrap_or_default().to_string(); // ← NEW
 
                 let mut artists_vec: Vec<String> = Vec::new();
@@ -1732,7 +1463,6 @@ pub fn run() {
             set_source_mode,
             get_gsmtc_app,
             set_gsmtc_app,
-            get_current_playing_uia,
         ])
         .on_window_event(|window, event| {
             use tauri::WindowEvent;
