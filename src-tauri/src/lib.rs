@@ -126,6 +126,19 @@ fn parse_artists(raw: &str) -> Vec<String> {
         }
     }
 
+    if out.len() == 1 {
+        let item = out[0].to_ascii_lowercase();
+        if item.contains(" and ") {
+            let original = out.pop().unwrap(); // remove the single combined entry
+            for part in original.split(" and ") {
+                let name = clean_person(part);
+                if !name.is_empty() {
+                    out.push(name);
+                }
+            }
+        }
+    }
+
     if out.is_empty() && !raw.trim().is_empty() {
         out.push(clean_person(raw));
     }
@@ -140,7 +153,7 @@ fn clean_person(name: &str) -> String {
         '<', '>', '（', '）', '「', '」', '『', '』', '【', '】', '《', '》', '"', '“', '”', '‘',
         '’', '\'', '–', '—', '−', '-', '•', '●',
     ];
-    let mut s = name.trim_matches(TRIM);
+    let s = name.trim_matches(TRIM);
     // collapse inner whitespace
     let collapsed = s.split_whitespace().collect::<Vec<_>>().join(" ");
     collapsed
@@ -839,10 +852,10 @@ async fn get_current_playing_gsmtc(window: tauri::Window) -> Result<serde_json::
                     dedup_push(&mut artists_vec, &n);
                 }
 
-                // // AlbumArtist often has multiple names (labels, teams, etc.)
-                // for n in parse_artists(&album_artist) {
-                //     dedup_push(&mut artists_vec, &n);
-                // }
+                // AlbumArtist often has multiple names (labels, teams, etc.)
+                for n in parse_artists(&album_artist) {
+                    dedup_push(&mut artists_vec, &n);
+                }
 
                 // Contributors embedded in the Title (“feat. …”, “with …”)
                 for n in parse_featured_from_title(&title) {
@@ -864,9 +877,13 @@ async fn get_current_playing_gsmtc(window: tauri::Window) -> Result<serde_json::
                 // If we already have a proper multi-letter artist, drop stray 1-letter tokens like "Y"
                 let have_multi_alpha = artists_vec
                     .iter()
-                    .any(|n| n.chars().filter(|c| c.is_alphabetic()).count() > 1);
+                    .any(|n| n.chars().filter(|c| c.is_alphabetic()).count() > 2);
+
                 if have_multi_alpha {
-                    artists_vec.retain(|n| n.chars().filter(|c| c.is_alphabetic()).count() > 1);
+                    artists_vec.retain(|n| {
+                        let alpha: String = n.chars().filter(|c| c.is_alphabetic()).collect();
+                        !(alpha.len() == 1 && alpha.chars().all(|c| c.is_lowercase()))
+                    });
                 }
 
                 // Thumbnail → bytes → cache file

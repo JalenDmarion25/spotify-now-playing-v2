@@ -563,11 +563,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // events
-  // await listen("now_playing_update", async (evt) => {
-  //   const d = evt.payload;
-  //   renderNowPlaying(d);
-  //   await maybeExport(d); // <-- auto export on every change while checked
-  // });
+  await listen("now_playing_update", async (evt) => {
+    const d = evt.payload;
+    renderNowPlaying(d);
+    await maybeExport(d); // <-- auto export on every change while checked
+  });
+  
   await listen("auth_lost", async () => {
     try {
       const ok = await invoke("restore_spotify");
