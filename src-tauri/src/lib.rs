@@ -18,7 +18,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tauri::{AppHandle, Emitter, LogicalSize, Manager, State};
+use tauri::{Emitter, LogicalSize, Manager, State};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use walkdir::WalkDir;
@@ -945,12 +945,7 @@ async fn get_current_playing_gsmtc(window: tauri::Window) -> Result<serde_json::
                                         .collect::<String>()
                                 };
 
-                                let png_path = cache_dir.join(format!(
-                                    "{}_{}_{}.png",
-                                    safe(&artist),
-                                    safe(&album),
-                                    safe(&title)
-                                ));
+                                let png_path = cache_dir.join("gsmtc_current.png");
 
                                 if let Ok(img) = image::load_from_memory(&bytes) {
                                     img.save(&png_path).map_err(|e| format!("save png: {e}"))?;

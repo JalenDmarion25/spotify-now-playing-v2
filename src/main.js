@@ -288,7 +288,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // kick off immediately, then poll every 2s
-  pollGSMTC();
   const gsmPoll = setInterval(pollGSMTC, 2000);
 
   // (optional) stop polling when page unloads
