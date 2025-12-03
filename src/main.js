@@ -109,8 +109,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     } catch {}
   }
 
-  console.log("[GSMTC View]", out);
-
   function makeDropdown(rootEl, { get, set, onChange, labelMap }) {
     if (!rootEl) return null;
     const toggleBtn = rootEl.querySelector(".dd-toggle");
@@ -276,19 +274,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (key && key !== lastGSMTCKey) {
         lastGSMTCKey = key;
 
-        // ✅ GSMTC View log – same frequency as the regular GSMTC log
-        console.log("[GSMTC View]", d);
-
         const artistsText =
           Array.isArray(d?.artists) && d.artists.length
             ? d.artists.join(", ")
             : d?.artist || "?";
-
-        console.log(
-          `[GSMTC] Now playing: Song: ${
-            d?.title || "?"
-          } — Artist: ${artistsText}` + (d?.album ? ` — Album: ${d.album}` : "")
-        );
       }
 
       // Render every poll (cheap)
