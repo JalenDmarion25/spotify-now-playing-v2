@@ -68,10 +68,6 @@ button:active {
   background-color: #e8e8e8;
 }
 
-/* option {
-  text-align: center;
-} */
-
 input,
 button {
   outline: none;
@@ -83,7 +79,6 @@ select {
   -webkit-appearance: none;
   -moz-appearance: none;
   padding-right: 2.2em;
-  /* custom chevron that inherits current text color */
   background-image: url("data:image/svg+xml,%3Csvg width='12' height='8' viewBox='0 0 12 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l5 5 5-5' stroke='currentColor' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 0.8em center;
@@ -100,7 +95,6 @@ select #gsmtc-filter-row {
   width: 60%;
 }
 
-/* hover/active to match buttons */
 select:hover {
   border-color: #04ad4b;
 }
@@ -125,7 +119,6 @@ select:active {
   color: red;
 }
 
-/* Make the custom dropdown and its children interactive (not draggable) */
 .dd,
 .dd * {
   -webkit-app-region: no-drag;
@@ -166,7 +159,6 @@ select:active {
   right: 0;
 }
 
-/* Stack options vertically and center them */
 .dd-menu {
   position: absolute;
   border-radius: 10px;
@@ -174,24 +166,23 @@ select:active {
   color: #0f0f0f;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   width: fit-content;
-  /* 👇 force vertical stacking */
   display: none;
-  display: none; /* closed by default */
-  flex-direction: column; /* when opened we'll switch to flex */
+  display: none; 
+  flex-direction: column;
 }
 
 .dd.open .dd-menu {
-  display: flex; /* 👈 turn on flex to stack children */
-  flex-direction: column; /* 👈 vertical */
+  display: flex;
+  flex-direction: column;
 }
 
 .dd-menu [role="option"] {
-  display: flex; /* centered row for the text */
+  display: flex;
   align-items: center;
   justify-content: center;
   padding: 0.6em 1.2em;
   cursor: pointer;
-  text-align: center; /* extra safety */
+  text-align: center;
 }
 
 @media (prefers-color-scheme: dark) {

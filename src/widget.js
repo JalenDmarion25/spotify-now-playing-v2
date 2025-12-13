@@ -177,11 +177,11 @@ function applyTheme(theme) {
   if (metaEl) metaEl.style.color = theme.meta ?? "#ffffff";
 }
 
-// --- ART/ANIM helpers (unchanged from your version) ---
-function resolveArtUrl(d) {
+function resolveArtUrl(d, bust = "") {
   if (d?.artwork_url) return d.artwork_url;
   if (d?.artwork_path && window.__TAURI__?.core?.convertFileSrc) {
-    return window.__TAURI__.core.convertFileSrc(d.artwork_path);
+    const base = window.__TAURI__.core.convertFileSrc(d.artwork_path);
+    return bust ? `${base}?v=${encodeURIComponent(bust)}` : base;
   }
   return "";
 }
@@ -322,8 +322,9 @@ function render(d) {
   slidePanel(true);
   const title = d.track_name;
   const meta =
-    typeof d.artists === "string" ? d.artists : (d.artists || []).join(", ");
-  const art = resolveArtUrl(d);
+  typeof d.artists === "string" ? d.artists : (d.artists || []).join(", ");
+  const artBust = `${d.track_name || ""}|${meta}|${d.album || ""}`;
+  const art = resolveArtUrl(d, artBust);
   const key = `${title}|${meta}|${art}`;
 
   if (key !== lastKey) {

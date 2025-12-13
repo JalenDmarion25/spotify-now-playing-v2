@@ -6,8 +6,8 @@ const { open: openDialog } = window.__TAURI__.dialog;
 document.addEventListener("DOMContentLoaded", async () => {
   const statusEl = document.getElementById("status");
   const localDirEl = document.getElementById("local-dir");
-  const nowPlayingEl = document.getElementById("now-playing"); // may be null
-  const artworkEl = document.getElementById("artwork"); // may be null
+  const nowPlayingEl = document.getElementById("now-playing");
+  const artworkEl = document.getElementById("artwork");
   const exportToggle = document.getElementById("export-toggle");
   const out = await window.__TAURI__.core.invoke("get_current_playing_gsmtc");
   const connectForm = document.getElementById("connect-form");
@@ -223,17 +223,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   })();
 
   const sourceDD = makeDropdown(sourceDdEl, {
-    get: () => getSourceMode(), // uses your SOURCE_KEY
+    get: () => getSourceMode(),
     set: (mode) => setSourceMode(mode),
     onChange: async (mode) => {
       try {
         await invoke("set_source_mode", { mode });
       } catch {}
-      // show/hide UI areas for each mode
       applySourceVisibility(mode);
-      // notify other windows
       await broadcastSourceMode(mode);
-      // keep GSMTC app filter broadcast in step, like your old select handler
       await broadcastGSMTCAppFilter(getGSMTCAppFilter());
     },
     labelMap: SOURCE_LABELS,
@@ -262,14 +259,55 @@ document.addEventListener("DOMContentLoaded", async () => {
       .join(","); // stable joined list
     const album = (d?.album || "").trim().toLowerCase();
 
-    if (!title && !artists && !album) return null; // <-- use artists
-    return [title, artists, album].join("||"); // <-- use artists
+    if (!title && !artists && !album) return null;
+    return [title, artists, album].join("||");
+  }
+
+  function normalizeGsmtcToNowPlaying(d) {
+    if (!d) return null;
+
+    const status = (d?.status || "").toLowerCase();
+    const active =
+      ["playing", "paused"].includes(status) || d?.position_ms != null;
+
+    if (!active) {
+      return {
+        is_playing: false,
+        track_name: null,
+        artists: [],
+        album: null,
+        artwork_url: null,
+        artwork_path: null,
+      };
+    }
+
+    const track_name = (d?.title || "").trim();
+    const artists =
+      Array.isArray(d?.artists) && d.artists.length
+        ? d.artists
+        : (d?.artist || "").trim()
+        ? [(d?.artist || "").trim()]
+        : [];
+
+    const album = (d?.album || "").trim() || null;
+
+    return {
+      is_playing: true,
+      track_name,
+      artists,
+      album,
+      artwork_url: null,
+      artwork_path: d?.artwork_path || null,
+    };
   }
 
   async function pollGSMTC() {
     try {
       const d = await window.__TAURI__.core.invoke("get_current_playing_gsmtc");
       const key = gsmKey(d);
+
+      const np = normalizeGsmtcToNowPlaying(d);
+      maybeExport(np);
 
       if (key && key !== lastGSMTCKey) {
         lastGSMTCKey = key;
@@ -303,8 +341,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     localStorage.getItem("exportEnabled") || "false"
   );
   if (exportToggle) exportToggle.checked = exportEnabled;
-  let exportDir = null; // cached output directory
-  let lastExportKey = ""; // de-dupe writes per track
+  let exportDir = null;
+  let lastExportKey = "";
 
   const showLocalDir = (dir) => {
     if (!localDirEl) return;
@@ -405,7 +443,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     } catch {}
 
-    // If none is set, prompt once and store it
     const dir = await openDialog({ directory: true, multiple: false });
     if (!dir) throw new Error("No export folder selected.");
     await invoke("set_local_art_dir", { path: dir });
@@ -437,6 +474,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   function maybeExport(d) {
     if (!exportEnabled || !d || !d.is_playing) return;
+    const mode = getSourceMode();
+
+    if (mode !== "spotify" && mode !== "gsmtc") return;
+    
     const key = trackKey(d);
     if (key === lastExportKey) return; // same song => skip
     lastExportKey = key;
@@ -450,7 +491,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       exportEnabled = e.target.checked;
       localStorage.setItem("exportEnabled", JSON.stringify(exportEnabled));
       if (exportEnabled) {
-        // Force an export immediately for the current track
         lastExportKey = "";
         try {
           const d = await invoke("get_current_playing");
@@ -563,7 +603,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   await listen("now_playing_update", async (evt) => {
     const d = evt.payload;
     renderNowPlaying(d);
-    await maybeExport(d); // <-- auto export on every change while checked
+    await maybeExport(d);
   });
 
   await listen("auth_lost", async () => {
@@ -624,7 +664,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  // --- widget window toggle: reliable close/open ---
+  // widget window toggle: reliable close/open
   const openWidgetBtn = document.getElementById("open-widget");
   if (openWidgetBtn) {
     const WIDGET_LABEL_OPEN = "Open Widget Window";
